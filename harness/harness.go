@@ -180,11 +180,15 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 
 		if cfg.ContextWindow > 0 {
 			if cfg.Compaction != nil {
-				eff := min(int(cfg.Compaction.Threshold*float64(cfg.ContextWindow)), cfg.ContextWindow-reservedHeadroomTokens)
-				if resp.Usage.PromptTokens >= eff {
-					newMsgs, cerr := compact(ctx, client, cfg.Model, msgs, cfg.Compaction.KeepRecentTurns, emit)
+				if resp.Usage.PromptTokens >= effectiveCompactionThreshold(cfg.ContextWindow, cfg.Compaction.Threshold) {
+					newMsgs, cerr := compact(ctx, client, cfg, msgs, cfg.Compaction.KeepRecentTurns, emit)
 					if cerr == nil {
+						// Discard the triggering turn's response (its tool calls never
+						// execute) and still count the turn — a transcript consumer may
+						// see a model_response/thinking for an abandoned turn followed
+						// by the compaction event.
 						msgs = newMsgs
+
 						continue
 					}
 

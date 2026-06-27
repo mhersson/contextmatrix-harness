@@ -20,11 +20,29 @@ const compactionPrompt = "Summarize the conversation so far into a compact brief
 	"Preserve: decisions made, files/paths touched, commands run and their outcomes, and the current state/next step. " +
 	"Omit pleasantries. Output only the briefing."
 
+// effectiveCompactionThreshold is the prompt-token count that triggers
+// compaction: threshold*window, capped below window-reservedHeadroomTokens
+// (so one turn's growth can't blow past the window), but the headroom floor
+// is applied only when it is itself positive — a small window still gets a
+// sane fractional trigger instead of a negative one.
+func effectiveCompactionThreshold(window int, threshold float64) int {
+	eff := int(threshold * float64(window))
+	if floor := window - reservedHeadroomTokens; floor > 0 && floor < eff {
+		eff = floor
+	}
+
+	return eff
+}
+
 // compact summarizes msgs[firstNonSystem : len-keepRecent] into one synthetic
 // message, keeping the system message and the last keepRecent messages verbatim.
 // Returns an error when there is not enough context to summarize meaningfully, or
 // when the summarize call fails.
-func compact(ctx context.Context, client llm.LLM, model string, msgs []llm.Message, keepRecent int, emit *events.Emitter) ([]llm.Message, error) {
+func compact(ctx context.Context, client llm.LLM, cfg Config, msgs []llm.Message, keepRecent int, emit *events.Emitter) ([]llm.Message, error) {
+	if keepRecent < 0 {
+		keepRecent = 0
+	}
+
 	sysCount := 0
 	if len(msgs) > 0 && msgs[0].Role == "system" {
 		sysCount = 1
@@ -37,7 +55,9 @@ func compact(ctx context.Context, client llm.LLM, model string, msgs []llm.Messa
 	older := msgs[sysCount : len(msgs)-keepRecent]
 
 	req := llm.Request{
-		Model: model,
+		Model:    cfg.Model,
+		Models:   cfg.Models,
+		Provider: cfg.Provider,
 		Messages: append([]llm.Message{
 			{Role: "system", Content: compactionPrompt},
 		}, older...),
