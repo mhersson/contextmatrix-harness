@@ -700,6 +700,25 @@ func TestRunDetectsIncapability(t *testing.T) {
 	assert.Less(t, res.Turns, 20, "incapable must fire before MaxTurns")
 }
 
+func TestRun_SeedsHistoryBeforeTask(t *testing.T) {
+	reg := tools.NewRegistry(tools.NewReadTool(t.TempDir()))
+	capt := &capturingLLM{}
+	_, err := Run(context.Background(), capt, reg, newEmitter(), "now", Config{
+		SystemPrompt: "SYS",
+		History: []llm.Message{
+			{Role: "user", Content: "prior Q"},
+			{Role: "assistant", Content: "prior A"},
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, []llm.Message{
+		{Role: "system", Content: "SYS"},
+		{Role: "user", Content: "prior Q"},
+		{Role: "assistant", Content: "prior A"},
+		{Role: "user", Content: "now"},
+	}, capt.last.Messages)
+}
+
 // Case 6: ctx cancel during Wait → Run returns ctx.Err() with Reason canceled.
 func TestInboxCtxCancelDuringWait(t *testing.T) {
 	reg := tools.NewRegistry(tools.NewReadTool(t.TempDir()))

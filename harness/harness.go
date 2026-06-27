@@ -42,6 +42,7 @@ type Config struct {
 	RedactToolOutput   func(string) string // nil = identity; applied before the size cap
 	Inbox              Inbox               // nil = autonomous; non-nil feeds mid-run human input
 	IncapableThreshold int                 // consecutive unproductive turns before "incapable"; 0 → default 3
+	History            []llm.Message       // prior conversation to seed before the initial task message; nil = unchanged behavior
 }
 
 type Result struct {
@@ -69,6 +70,8 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 	if cfg.SystemPrompt != "" {
 		msgs = append(msgs, llm.Message{Role: "system", Content: cfg.SystemPrompt})
 	}
+
+	msgs = append(msgs, cfg.History...)
 
 	msgs = append(msgs, llm.Message{Role: "user", Content: task})
 
