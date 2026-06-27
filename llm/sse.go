@@ -118,8 +118,11 @@ func parseStreamWithLimit(r io.Reader, onDelta func(Delta), maxLine int) (Respon
 				}
 			}
 
-			if d.Reasoning != "" && onDelta != nil {
-				onDelta(Delta{Reasoning: d.Reasoning})
+			if d.Reasoning != "" {
+				resp.Reasoning += d.Reasoning
+				if onDelta != nil {
+					onDelta(Delta{Reasoning: d.Reasoning})
+				}
 			}
 
 			for _, tc := range d.ToolCalls {

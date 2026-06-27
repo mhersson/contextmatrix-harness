@@ -76,6 +76,21 @@ func TestParseStreamRejectsOverlongLineClearly(t *testing.T) {
 	assert.Contains(t, err.Error(), "exceeds")
 }
 
+func TestSendStream_AccumulatesReasoningWithNilOnDelta(t *testing.T) {
+	body := strings.Join([]string{
+		`data: {"choices":[{"delta":{"reasoning":"Let me "}}]}`,
+		`data: {"choices":[{"delta":{"reasoning":"think."}}]}`,
+		`data: {"choices":[{"delta":{"content":"Hello"}}]}`,
+		`data: {"choices":[{"delta":{"content":" world"}}]}`,
+		`data: [DONE]`,
+	}, "\n\n") + "\n\n"
+
+	resp, err := parseStream(strings.NewReader(body), nil)
+	require.NoError(t, err)
+	require.Equal(t, "Let me think.", resp.Reasoning)
+	require.Equal(t, "Hello world", resp.Content)
+}
+
 func TestParseStreamTruncationDetection(t *testing.T) {
 	chunk := `data: {"choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}]}`
 	noFinish := `data: {"choices":[{"delta":{"content":"hi"}}]}`

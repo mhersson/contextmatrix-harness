@@ -69,6 +69,7 @@ type Usage struct {
 // Response is the assembled result of one model call (stream or non-stream).
 type Response struct {
 	Content      string
+	Reasoning    string
 	ToolCalls    []ToolCall
 	FinishReason string
 	Model        string // model actually used (after fallback)
