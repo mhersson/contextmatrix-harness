@@ -58,6 +58,7 @@ type Config struct {
 	IncapableThreshold int                 // consecutive unproductive turns before "incapable"; 0 → default 3
 	History            []llm.Message       // prior conversation to seed before the initial task message; nil = unchanged behavior
 	Compaction         *Compaction         // nil = hard context_limit stop (v1 behavior); non-nil = in-window compaction
+	Interactive        bool                // true = unbounded turns; incapable/transport errors await next input instead of terminating (requires Inbox)
 }
 
 type Result struct {
@@ -90,7 +91,7 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 
 	msgs = append(msgs, llm.Message{Role: "user", Content: task})
 
-	if cfg.MaxTurns <= 0 {
+	if cfg.MaxTurns <= 0 && !cfg.Interactive {
 		cfg.MaxTurns = defaultMaxTurns
 	}
 
@@ -99,7 +100,12 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 	// no tool calls are neutral and do not touch this counter.
 	unproductive := 0
 
-	for res.Turns < cfg.MaxTurns {
+	// MaxTurns>0 per-exchange backstop in interactive mode is deferred;
+	// chat uses MaxTurns=0 (unbounded). Non-interactive behavior is byte-identical.
+	for {
+		if !cfg.Interactive && res.Turns >= cfg.MaxTurns {
+			break
+		}
 		if cfg.MaxCostUSD > 0 && res.TotalCostUSD >= cfg.MaxCostUSD {
 			res.Reason = "max_cost"
 			emit.Emit(events.StateChange, map[string]any{"stop": "max_cost", "cost_usd": res.TotalCostUSD})
@@ -124,6 +130,24 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 		resp, err := client.SendStream(ctx, req, nil)
 		if err != nil {
 			emit.Emit(events.ErrorKind, map[string]any{"error": err.Error()})
+
+			if cfg.Interactive {
+				var outcome string
+				var awaitErr error
+				msgs, outcome, awaitErr = awaitNext(ctx, cfg, msgs, emit)
+				switch outcome {
+				case "continue":
+					continue
+				case "done":
+					res.Completed = true
+					res.Reason = "done"
+					emit.Emit(events.StateChange, map[string]any{"stop": "done", "turns": res.Turns})
+					return res, nil
+				default: // "canceled"
+					res.Reason = "canceled"
+					return res, awaitErr
+				}
+			}
 
 			res.Reason = "error"
 
@@ -330,11 +354,30 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 				}
 
 				if unproductive >= thr {
-					res.Reason = ReasonIncapable
 					emit.Emit(events.ErrorKind, map[string]any{
 						"error": "model cannot drive the tool loop",
 						"model": res.ModelUsed,
 					})
+
+					if cfg.Interactive {
+						unproductive = 0
+						var outcome string
+						msgs, outcome, err = awaitNext(ctx, cfg, msgs, emit)
+						switch outcome {
+						case "continue":
+							continue
+						case "done":
+							res.Completed = true
+							res.Reason = "done"
+							emit.Emit(events.StateChange, map[string]any{"stop": "done", "turns": res.Turns})
+							return res, nil
+						default: // "canceled"
+							res.Reason = "canceled"
+							return res, err
+						}
+					}
+
+					res.Reason = ReasonIncapable
 
 					return res, nil
 				}
@@ -368,6 +411,28 @@ func drainInbox(cfg Config, msgs []llm.Message, emit *events.Emitter) []llm.Mess
 	}
 
 	return msgs
+}
+
+// awaitNext blocks for the next user message after a non-terminal stop
+// (incapable or transport error) in interactive mode. It returns the
+// extended msgs and an outcome: "continue" (a message arrived; appended),
+// "done" (inbox closed), or "canceled" (ctx error).
+func awaitNext(ctx context.Context, cfg Config, msgs []llm.Message, emit *events.Emitter) ([]llm.Message, string, error) {
+	emit.Emit(events.StateChange, map[string]any{"state": "awaiting_human"})
+
+	um, err := cfg.Inbox.Wait(ctx)
+
+	switch {
+	case errors.Is(err, ErrInboxClosed):
+		return msgs, "done", nil
+	case err != nil:
+		return msgs, "canceled", err
+	}
+
+	emit.Emit(events.UserInput, map[string]any{"message_id": um.MessageID, "content_len": len(um.Content)})
+	msgs = append(msgs, llm.Message{Role: "user", Content: um.Content})
+
+	return msgs, "continue", nil
 }
 
 func toolResultMsg(id, content string) llm.Message {
