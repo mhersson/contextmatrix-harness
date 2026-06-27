@@ -76,7 +76,7 @@ func TestParseStreamRejectsOverlongLineClearly(t *testing.T) {
 	assert.Contains(t, err.Error(), "exceeds")
 }
 
-func TestSendStream_AccumulatesReasoningWithNilOnDelta(t *testing.T) {
+func TestParseStream_AccumulatesReasoningWithNilOnDelta(t *testing.T) {
 	body := strings.Join([]string{
 		`data: {"choices":[{"delta":{"reasoning":"Let me "}}]}`,
 		`data: {"choices":[{"delta":{"reasoning":"think."}}]}`,
