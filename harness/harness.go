@@ -107,7 +107,6 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 	// MaxTurns>0 per-exchange backstop in interactive mode is deferred;
 	// chat uses MaxTurns=0 (unbounded). Non-interactive behavior is byte-identical.
 	for cfg.Interactive || res.Turns < cfg.MaxTurns {
-
 		if cfg.MaxCostUSD > 0 && res.TotalCostUSD >= cfg.MaxCostUSD {
 			res.Reason = "max_cost"
 			emit.Emit(events.StateChange, map[string]any{"stop": "max_cost", "cost_usd": res.TotalCostUSD})
