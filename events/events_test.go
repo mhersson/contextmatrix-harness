@@ -36,3 +36,7 @@ func TestEmitterSeqAndDualOutput(t *testing.T) {
 	assert.Contains(t, human.String(), "model_request")
 	assert.Contains(t, human.String(), "tool_call")
 }
+
+func TestThinkingKindValue(t *testing.T) {
+	require.Equal(t, "thinking", string(Thinking))
+}

@@ -29,6 +29,20 @@ const ReasonIncapable = "incapable"
 // no compactor). Detection uses the provider's authoritative prompt_tokens.
 const contextLimitThreshold = 0.85
 
+// Compaction controls in-window context compaction. When non-nil, the harness
+// summarizes the older conversation prefix once the effective threshold is reached,
+// then continues instead of hard-stopping.
+type Compaction struct {
+	// Threshold is the fraction of ContextWindow at which compaction fires
+	// (e.g. 0.85 = 85%). The effective threshold is the minimum of this value
+	// and (ContextWindow - reservedHeadroomTokens), so compaction also fires
+	// when fewer than reservedHeadroomTokens tokens remain.
+	Threshold float64
+	// KeepRecentTurns is the number of messages (from the end of the history)
+	// to preserve verbatim after compaction. The older prefix is summarized.
+	KeepRecentTurns int
+}
+
 type Config struct {
 	Model              string
 	Models             []string
@@ -42,6 +56,9 @@ type Config struct {
 	RedactToolOutput   func(string) string // nil = identity; applied before the size cap
 	Inbox              Inbox               // nil = autonomous; non-nil feeds mid-run human input
 	IncapableThreshold int                 // consecutive unproductive turns before "incapable"; 0 → default 3
+	History            []llm.Message       // prior conversation to seed before the initial task message; nil = unchanged behavior
+	Compaction         *Compaction         // nil = hard context_limit stop (v1 behavior); non-nil = in-window compaction
+	Interactive        bool                // true = unbounded turns; incapable/transport errors await next input instead of terminating (requires Inbox)
 }
 
 type Result struct {
@@ -66,13 +83,19 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 		msgs []llm.Message
 	)
 
+	if cfg.Interactive && cfg.Inbox == nil {
+		return res, errors.New("harness: Interactive mode requires a non-nil Inbox")
+	}
+
 	if cfg.SystemPrompt != "" {
 		msgs = append(msgs, llm.Message{Role: "system", Content: cfg.SystemPrompt})
 	}
 
+	msgs = append(msgs, cfg.History...)
+
 	msgs = append(msgs, llm.Message{Role: "user", Content: task})
 
-	if cfg.MaxTurns <= 0 {
+	if cfg.MaxTurns <= 0 && !cfg.Interactive {
 		cfg.MaxTurns = defaultMaxTurns
 	}
 
@@ -81,7 +104,9 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 	// no tool calls are neutral and do not touch this counter.
 	unproductive := 0
 
-	for res.Turns < cfg.MaxTurns {
+	// MaxTurns>0 per-exchange backstop in interactive mode is deferred;
+	// chat uses MaxTurns=0 (unbounded). Non-interactive behavior is byte-identical.
+	for cfg.Interactive || res.Turns < cfg.MaxTurns {
 		if cfg.MaxCostUSD > 0 && res.TotalCostUSD >= cfg.MaxCostUSD {
 			res.Reason = "max_cost"
 			emit.Emit(events.StateChange, map[string]any{"stop": "max_cost", "cost_usd": res.TotalCostUSD})
@@ -107,6 +132,29 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 		if err != nil {
 			emit.Emit(events.ErrorKind, map[string]any{"error": err.Error()})
 
+			if cfg.Interactive {
+				var (
+					outcome  string
+					awaitErr error
+				)
+
+				msgs, outcome, awaitErr = awaitNext(ctx, cfg, msgs, emit, res.Turns)
+				switch outcome {
+				case "continue":
+					continue
+				case "done":
+					res.Completed = true
+					res.Reason = "done"
+					emit.Emit(events.StateChange, map[string]any{"stop": "done", "turns": res.Turns})
+
+					return res, nil
+				default: // "canceled"
+					res.Reason = "canceled"
+
+					return res, awaitErr
+				}
+			}
+
 			res.Reason = "error"
 
 			return res, err
@@ -121,6 +169,11 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 		}
 
 		res.Output = resp.Content
+
+		if resp.Reasoning != "" {
+			emit.Emit(events.Thinking, map[string]any{"turn": res.Turns, "content": resp.Reasoning})
+		}
+
 		emit.Emit(events.ModelResponse, map[string]any{
 			"turn": res.Turns, "finish_reason": resp.FinishReason,
 			"tool_calls": len(resp.ToolCalls), "content_len": len(resp.Content),
@@ -131,17 +184,41 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 			"cost_usd": resp.Usage.Cost, "model": cfg.Model,
 		})
 
-		if cfg.ContextWindow > 0 && resp.Usage.PromptTokens >= int(contextLimitThreshold*float64(cfg.ContextWindow)) {
-			res.Reason = "context_limit"
+		if cfg.ContextWindow > 0 {
+			if cfg.Compaction != nil {
+				if resp.Usage.PromptTokens >= effectiveCompactionThreshold(cfg.ContextWindow, cfg.Compaction.Threshold) {
+					newMsgs, cerr := compact(ctx, client, cfg, msgs, cfg.Compaction.KeepRecentTurns, emit)
+					if cerr == nil {
+						// Discard the triggering turn's response (its tool calls never
+						// execute) and still count the turn — a transcript consumer may
+						// see a model_response/thinking for an abandoned turn followed
+						// by the compaction event.
+						msgs = newMsgs
 
-			emit.Emit(events.ContextLimit, map[string]any{
-				"prompt_tokens":  resp.Usage.PromptTokens,
-				"context_window": cfg.ContextWindow,
-				"ratio":          float64(resp.Usage.PromptTokens) / float64(cfg.ContextWindow),
-				"threshold":      contextLimitThreshold,
-			})
+						continue
+					}
 
-			return res, nil
+					// Compaction failed (e.g. nothing left to summarize): emit a
+					// warning and fall through to the hard-stop check below.
+					emit.Emit(events.StateChange, map[string]any{
+						"event": "compaction_failed",
+						"error": cerr.Error(),
+					})
+				}
+			}
+
+			if resp.Usage.PromptTokens >= int(contextLimitThreshold*float64(cfg.ContextWindow)) {
+				res.Reason = "context_limit"
+
+				emit.Emit(events.ContextLimit, map[string]any{
+					"prompt_tokens":  resp.Usage.PromptTokens,
+					"context_window": cfg.ContextWindow,
+					"ratio":          float64(resp.Usage.PromptTokens) / float64(cfg.ContextWindow),
+					"threshold":      contextLimitThreshold,
+				})
+
+				return res, nil
+			}
 		}
 
 		msgs = append(msgs, llm.Message{Role: "assistant", Content: resp.Content, ToolCalls: resp.ToolCalls})
@@ -292,11 +369,34 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 				}
 
 				if unproductive >= thr {
-					res.Reason = ReasonIncapable
 					emit.Emit(events.ErrorKind, map[string]any{
 						"error": "model cannot drive the tool loop",
 						"model": res.ModelUsed,
 					})
+
+					if cfg.Interactive {
+						unproductive = 0
+
+						var outcome string
+
+						msgs, outcome, err = awaitNext(ctx, cfg, msgs, emit, res.Turns)
+						switch outcome {
+						case "continue":
+							continue
+						case "done":
+							res.Completed = true
+							res.Reason = "done"
+							emit.Emit(events.StateChange, map[string]any{"stop": "done", "turns": res.Turns})
+
+							return res, nil
+						default: // "canceled"
+							res.Reason = "canceled"
+
+							return res, err
+						}
+					}
+
+					res.Reason = ReasonIncapable
 
 					return res, nil
 				}
@@ -330,6 +430,28 @@ func drainInbox(cfg Config, msgs []llm.Message, emit *events.Emitter) []llm.Mess
 	}
 
 	return msgs
+}
+
+// awaitNext blocks for the next user message after a non-terminal stop
+// (incapable or transport error) in interactive mode. It returns the
+// extended msgs and an outcome: "continue" (a message arrived; appended),
+// "done" (inbox closed), or "canceled" (ctx error).
+func awaitNext(ctx context.Context, cfg Config, msgs []llm.Message, emit *events.Emitter, turn int) ([]llm.Message, string, error) {
+	emit.Emit(events.StateChange, map[string]any{"state": "awaiting_human", "turns": turn})
+
+	um, err := cfg.Inbox.Wait(ctx)
+
+	switch {
+	case errors.Is(err, ErrInboxClosed):
+		return msgs, "done", nil
+	case err != nil:
+		return msgs, "canceled", err
+	}
+
+	emit.Emit(events.UserInput, map[string]any{"message_id": um.MessageID, "content_len": len(um.Content)})
+	msgs = append(msgs, llm.Message{Role: "user", Content: um.Content})
+
+	return msgs, "continue", nil
 }
 
 func toolResultMsg(id, content string) llm.Message {

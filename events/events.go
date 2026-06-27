@@ -24,6 +24,7 @@ const (
 	ErrorKind     Kind = "error"
 	ToolRepair    Kind = "tool_repair"
 	UserInput     Kind = "user_input"
+	Thinking      Kind = "thinking"
 )
 
 // Event is one entry in the stream.
