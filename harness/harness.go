@@ -83,6 +83,10 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 		msgs []llm.Message
 	)
 
+	if cfg.Interactive && cfg.Inbox == nil {
+		return res, errors.New("harness: Interactive mode requires a non-nil Inbox")
+	}
+
 	if cfg.SystemPrompt != "" {
 		msgs = append(msgs, llm.Message{Role: "system", Content: cfg.SystemPrompt})
 	}
@@ -102,10 +106,8 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 
 	// MaxTurns>0 per-exchange backstop in interactive mode is deferred;
 	// chat uses MaxTurns=0 (unbounded). Non-interactive behavior is byte-identical.
-	for {
-		if !cfg.Interactive && res.Turns >= cfg.MaxTurns {
-			break
-		}
+	for cfg.Interactive || res.Turns < cfg.MaxTurns {
+
 		if cfg.MaxCostUSD > 0 && res.TotalCostUSD >= cfg.MaxCostUSD {
 			res.Reason = "max_cost"
 			emit.Emit(events.StateChange, map[string]any{"stop": "max_cost", "cost_usd": res.TotalCostUSD})
@@ -132,9 +134,12 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 			emit.Emit(events.ErrorKind, map[string]any{"error": err.Error()})
 
 			if cfg.Interactive {
-				var outcome string
-				var awaitErr error
-				msgs, outcome, awaitErr = awaitNext(ctx, cfg, msgs, emit)
+				var (
+					outcome  string
+					awaitErr error
+				)
+
+				msgs, outcome, awaitErr = awaitNext(ctx, cfg, msgs, emit, res.Turns)
 				switch outcome {
 				case "continue":
 					continue
@@ -142,9 +147,11 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 					res.Completed = true
 					res.Reason = "done"
 					emit.Emit(events.StateChange, map[string]any{"stop": "done", "turns": res.Turns})
+
 					return res, nil
 				default: // "canceled"
 					res.Reason = "canceled"
+
 					return res, awaitErr
 				}
 			}
@@ -370,8 +377,10 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 
 					if cfg.Interactive {
 						unproductive = 0
+
 						var outcome string
-						msgs, outcome, err = awaitNext(ctx, cfg, msgs, emit)
+
+						msgs, outcome, err = awaitNext(ctx, cfg, msgs, emit, res.Turns)
 						switch outcome {
 						case "continue":
 							continue
@@ -379,9 +388,11 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 							res.Completed = true
 							res.Reason = "done"
 							emit.Emit(events.StateChange, map[string]any{"stop": "done", "turns": res.Turns})
+
 							return res, nil
 						default: // "canceled"
 							res.Reason = "canceled"
+
 							return res, err
 						}
 					}
@@ -426,8 +437,8 @@ func drainInbox(cfg Config, msgs []llm.Message, emit *events.Emitter) []llm.Mess
 // (incapable or transport error) in interactive mode. It returns the
 // extended msgs and an outcome: "continue" (a message arrived; appended),
 // "done" (inbox closed), or "canceled" (ctx error).
-func awaitNext(ctx context.Context, cfg Config, msgs []llm.Message, emit *events.Emitter) ([]llm.Message, string, error) {
-	emit.Emit(events.StateChange, map[string]any{"state": "awaiting_human"})
+func awaitNext(ctx context.Context, cfg Config, msgs []llm.Message, emit *events.Emitter, turn int) ([]llm.Message, string, error) {
+	emit.Emit(events.StateChange, map[string]any{"state": "awaiting_human", "turns": turn})
 
 	um, err := cfg.Inbox.Wait(ctx)
 

@@ -727,6 +727,7 @@ func TestRun_EmitsThinkingFromReasoning(t *testing.T) {
 	}}
 
 	var transcript bytes.Buffer
+
 	emit := events.NewEmitter(nil, &transcript)
 
 	_, err := Run(context.Background(), f, reg, emit, "task", Config{MaxTurns: 10})
@@ -739,6 +740,7 @@ func TestRun_EmitsThinkingFromReasoning(t *testing.T) {
 	for i, ev := range evs {
 		if ev.Kind == events.Thinking && thinkingIdx == -1 {
 			thinkingIdx = i
+
 			assert.Equal(t, "pondering", ev.Data["content"], "thinking event must carry the reasoning content")
 		}
 

@@ -39,8 +39,10 @@ func (s *scriptedLLMWithErrors) sendNext() (llm.Response, error) {
 	if s.i >= len(s.results) {
 		return llm.Response{FinishReason: "stop"}, nil
 	}
+
 	r := s.results[s.i]
 	s.i++
+
 	return r.resp, r.err
 }
 
@@ -57,6 +59,7 @@ func TestInteractiveUnbounded(t *testing.T) {
 			ToolCalls: []llm.ToolCall{toolCall("1", "read", `{"path":"missing"}`)},
 		}
 	}
+
 	responses[scriptedTurns] = llm.Response{Content: "done", FinishReason: "stop"}
 
 	f := &fakeLLM{responses: responses}
@@ -100,6 +103,7 @@ func TestInteractiveIncapableRecovery(t *testing.T) {
 	reg := tools.NewRegistry(tools.NewReadTool(t.TempDir()))
 
 	var transcript bytes.Buffer
+
 	emit := events.NewEmitter(nil, &transcript)
 
 	res, err := Run(context.Background(), f, reg, emit, "task", Config{
@@ -115,16 +119,80 @@ func TestInteractiveIncapableRecovery(t *testing.T) {
 
 	// The error event for "model cannot drive the tool loop" must be emitted.
 	evs := parseEvents(t, transcript.String())
+
 	var sawIncapableError bool
+
 	for _, ev := range evs {
 		if ev.Kind == events.ErrorKind {
 			if msg, ok := ev.Data["error"].(string); ok && strings.Contains(msg, "model cannot drive") {
 				sawIncapableError = true
+
 				break
 			}
 		}
 	}
+
 	assert.True(t, sawIncapableError, "error event for incapable must be emitted before awaiting input")
+}
+
+// TestRun_InteractiveRequiresInbox verifies that Run returns a clear error
+// immediately when Interactive=true and Inbox is nil, without panicking.
+func TestRun_InteractiveRequiresInbox(t *testing.T) {
+	reg := tools.NewRegistry()
+	f := &fakeLLM{}
+
+	res, err := Run(context.Background(), f, reg, newEmitter(), "task", Config{
+		Interactive: true,
+		Inbox:       nil,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Interactive mode requires a non-nil Inbox")
+	assert.False(t, res.Completed)
+}
+
+// TestAwaitNext_EmitsTurnsKey checks that the awaiting_human event emitted by
+// awaitNext (incapable-recovery path) carries the "turns" key, matching the
+// schema used by the natural-stop awaiting_human emit.
+func TestAwaitNext_EmitsTurnsKey(t *testing.T) {
+	badCall := toolCall("1", "read", `{ this is not json`)
+	responses := []llm.Response{
+		{ToolCalls: []llm.ToolCall{badCall}},
+		{ToolCalls: []llm.ToolCall{badCall}},
+		{ToolCalls: []llm.ToolCall{badCall}},
+		{Content: "recovered", FinishReason: "stop"},
+	}
+
+	f := &fakeLLM{responses: responses}
+	inbox := &scriptedInbox{
+		pending:            []UserMessage{{Content: "try again", MessageID: "m1"}},
+		closeErr:           ErrInboxClosed,
+		deliverViaWaitOnly: true,
+	}
+	reg := tools.NewRegistry(tools.NewReadTool(t.TempDir()))
+
+	var transcript bytes.Buffer
+
+	emit := events.NewEmitter(nil, &transcript)
+
+	_, err := Run(context.Background(), f, reg, emit, "task", Config{
+		Interactive:        true,
+		MaxTurns:           20,
+		Inbox:              inbox,
+		IncapableThreshold: 3,
+	})
+	require.NoError(t, err)
+
+	evs := parseEvents(t, transcript.String())
+
+	// The FIRST awaiting_human event comes from awaitNext (incapable recovery),
+	// not from the natural-stop inbox-wait. Both must carry "turns".
+	for _, ev := range evs {
+		if ev.Kind == events.StateChange && ev.Data["state"] == "awaiting_human" {
+			assert.Contains(t, ev.Data, "turns", "awaiting_human from awaitNext must include 'turns' key")
+
+			break // first occurrence is the awaitNext one
+		}
+	}
 }
 
 // TestInteractiveTransportErrorRecovery asserts that a SendStream error in
@@ -148,6 +216,7 @@ func TestInteractiveTransportErrorRecovery(t *testing.T) {
 	reg := tools.NewRegistry(tools.NewReadTool(t.TempDir()))
 
 	var transcript bytes.Buffer
+
 	emit := events.NewEmitter(nil, &transcript)
 
 	res, err := Run(context.Background(), fakeClient, reg, emit, "task", Config{
@@ -162,14 +231,18 @@ func TestInteractiveTransportErrorRecovery(t *testing.T) {
 
 	// The error event must have been emitted for the transport failure.
 	evs := parseEvents(t, transcript.String())
+
 	var sawTransportError bool
+
 	for _, ev := range evs {
 		if ev.Kind == events.ErrorKind {
 			if msg, ok := ev.Data["error"].(string); ok && strings.Contains(msg, "connection refused") {
 				sawTransportError = true
+
 				break
 			}
 		}
 	}
+
 	assert.True(t, sawTransportError, "error event for transport failure must be emitted")
 }
