@@ -1,0 +1,4 @@
+# Binaries / test artifacts
+*.test
+*.out
+/coverage.txt

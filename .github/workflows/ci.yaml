@@ -1,0 +1,114 @@
+# CI pipeline for contextmatrix-harness.
+#
+# Gates every pull_request on build, test, lint, govulncheck, and the
+# import-boundary deps-gate. Pushes to main skip the checks (already validated
+# on the PR).
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.0
+      - name: Setup Go
+        uses: actions/setup-go@v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: go test
+        run: make test
+      - name: go test -race
+        run: make test-race
+
+  lint:
+    name: lint
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.0
+      - name: Setup Go
+        uses: actions/setup-go@v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install golangci-lint
+        run: |
+          set -euo pipefail
+          VERSION=$(grep '^GOLANGCI_LINT_VERSION' Makefile | head -1 | awk '{print $NF}')
+          curl -sSfL "https://raw.githubusercontent.com/golangci/golangci-lint/${VERSION}/install.sh" \
+            | sh -s -- -b "$(go env GOPATH)/bin" "${VERSION}"
+      - name: golangci-lint
+        run: make lint
+
+  build:
+    name: build
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.0
+      - name: Setup Go
+        uses: actions/setup-go@v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: go build
+        run: make build
+
+  deps-gate:
+    name: deps-gate
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.0
+      - name: Setup Go
+        uses: actions/setup-go@v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Boundary gate
+        run: make deps-gate
+
+  govulncheck:
+    name: govulncheck
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.0
+      - name: Setup Go
+        uses: actions/setup-go@v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      - name: Run govulncheck (fail only on fixable findings)
+        run: |
+          set -euo pipefail
+          govulncheck -format=json ./... > /tmp/vuln.json 2>&1 || true
+          FIXABLE=$(jq -s '[.[] | select(.finding != null
+                                          and .finding.fixed_version != null
+                                          and .finding.fixed_version != "")] | length' /tmp/vuln.json)
+          echo "fixable findings: ${FIXABLE}"
+          govulncheck ./... || true
+          if [ "${FIXABLE:-0}" -gt 0 ]; then
+            echo "::error::Fixable vulnerabilities detected. See output above."
+            exit 1
+          fi
+          echo "No fixable vulnerabilities."
