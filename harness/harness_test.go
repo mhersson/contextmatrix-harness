@@ -719,6 +719,39 @@ func TestRun_SeedsHistoryBeforeTask(t *testing.T) {
 	}, capt.last.Messages)
 }
 
+func TestRun_EmitsThinkingFromReasoning(t *testing.T) {
+	reg := tools.NewRegistry(tools.NewReadTool(t.TempDir()))
+	// Single response with Reasoning set; no tool calls so the loop exits cleanly.
+	f := &fakeLLM{responses: []llm.Response{
+		{Content: "done", Reasoning: "pondering", FinishReason: "stop"},
+	}}
+
+	var transcript bytes.Buffer
+	emit := events.NewEmitter(nil, &transcript)
+
+	_, err := Run(context.Background(), f, reg, emit, "task", Config{MaxTurns: 10})
+	require.NoError(t, err)
+
+	evs := parseEvents(t, transcript.String())
+
+	thinkingIdx, modelResponseIdx := -1, -1
+
+	for i, ev := range evs {
+		if ev.Kind == events.Thinking && thinkingIdx == -1 {
+			thinkingIdx = i
+			assert.Equal(t, "pondering", ev.Data["content"], "thinking event must carry the reasoning content")
+		}
+
+		if ev.Kind == events.ModelResponse && modelResponseIdx == -1 {
+			modelResponseIdx = i
+		}
+	}
+
+	require.GreaterOrEqual(t, thinkingIdx, 0, "thinking event not recorded")
+	require.GreaterOrEqual(t, modelResponseIdx, 0, "model_response event not recorded")
+	assert.Less(t, thinkingIdx, modelResponseIdx, "thinking event must be emitted before model_response")
+}
+
 // Case 6: ctx cancel during Wait → Run returns ctx.Err() with Reason canceled.
 func TestInboxCtxCancelDuringWait(t *testing.T) {
 	reg := tools.NewRegistry(tools.NewReadTool(t.TempDir()))

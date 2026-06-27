@@ -163,6 +163,11 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 		}
 
 		res.Output = resp.Content
+
+		if resp.Reasoning != "" {
+			emit.Emit(events.Thinking, map[string]any{"turn": res.Turns, "content": resp.Reasoning})
+		}
+
 		emit.Emit(events.ModelResponse, map[string]any{
 			"turn": res.Turns, "finish_reason": resp.FinishReason,
 			"tool_calls": len(resp.ToolCalls), "content_len": len(resp.Content),
