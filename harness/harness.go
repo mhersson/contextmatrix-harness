@@ -29,6 +29,20 @@ const ReasonIncapable = "incapable"
 // no compactor). Detection uses the provider's authoritative prompt_tokens.
 const contextLimitThreshold = 0.85
 
+// Compaction controls in-window context compaction. When non-nil, the harness
+// summarizes the older conversation prefix once the effective threshold is reached,
+// then continues instead of hard-stopping.
+type Compaction struct {
+	// Threshold is the fraction of ContextWindow at which compaction fires
+	// (e.g. 0.85 = 85%). The effective threshold is the minimum of this value
+	// and (ContextWindow - reservedHeadroomTokens), so compaction also fires
+	// when fewer than reservedHeadroomTokens tokens remain.
+	Threshold float64
+	// KeepRecentTurns is the number of messages (from the end of the history)
+	// to preserve verbatim after compaction. The older prefix is summarized.
+	KeepRecentTurns int
+}
+
 type Config struct {
 	Model              string
 	Models             []string
@@ -43,6 +57,7 @@ type Config struct {
 	Inbox              Inbox               // nil = autonomous; non-nil feeds mid-run human input
 	IncapableThreshold int                 // consecutive unproductive turns before "incapable"; 0 → default 3
 	History            []llm.Message       // prior conversation to seed before the initial task message; nil = unchanged behavior
+	Compaction         *Compaction         // nil = hard context_limit stop (v1 behavior); non-nil = in-window compaction
 }
 
 type Result struct {
@@ -134,17 +149,37 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 			"cost_usd": resp.Usage.Cost, "model": cfg.Model,
 		})
 
-		if cfg.ContextWindow > 0 && resp.Usage.PromptTokens >= int(contextLimitThreshold*float64(cfg.ContextWindow)) {
-			res.Reason = "context_limit"
+		if cfg.ContextWindow > 0 {
+			if cfg.Compaction != nil {
+				eff := min(int(cfg.Compaction.Threshold*float64(cfg.ContextWindow)), cfg.ContextWindow-reservedHeadroomTokens)
+				if resp.Usage.PromptTokens >= eff {
+					newMsgs, cerr := compact(ctx, client, cfg.Model, msgs, cfg.Compaction.KeepRecentTurns, emit)
+					if cerr == nil {
+						msgs = newMsgs
+						continue
+					}
 
-			emit.Emit(events.ContextLimit, map[string]any{
-				"prompt_tokens":  resp.Usage.PromptTokens,
-				"context_window": cfg.ContextWindow,
-				"ratio":          float64(resp.Usage.PromptTokens) / float64(cfg.ContextWindow),
-				"threshold":      contextLimitThreshold,
-			})
+					// Compaction failed (e.g. nothing left to summarize): emit a
+					// warning and fall through to the hard-stop check below.
+					emit.Emit(events.StateChange, map[string]any{
+						"event": "compaction_failed",
+						"error": cerr.Error(),
+					})
+				}
+			}
 
-			return res, nil
+			if resp.Usage.PromptTokens >= int(contextLimitThreshold*float64(cfg.ContextWindow)) {
+				res.Reason = "context_limit"
+
+				emit.Emit(events.ContextLimit, map[string]any{
+					"prompt_tokens":  resp.Usage.PromptTokens,
+					"context_window": cfg.ContextWindow,
+					"ratio":          float64(resp.Usage.PromptTokens) / float64(cfg.ContextWindow),
+					"threshold":      contextLimitThreshold,
+				})
+
+				return res, nil
+			}
 		}
 
 		msgs = append(msgs, llm.Message{Role: "assistant", Content: resp.Content, ToolCalls: resp.ToolCalls})
