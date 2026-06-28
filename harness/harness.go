@@ -59,6 +59,10 @@ type Config struct {
 	History            []llm.Message       // prior conversation to seed before the initial task message; nil = unchanged behavior
 	Compaction         *Compaction         // nil = hard context_limit stop (v1 behavior); non-nil = in-window compaction
 	Interactive        bool                // true = unbounded turns; incapable/transport errors await next input instead of terminating (requires Inbox)
+	// TaskImages, when non-empty, are attached to the initial user message as
+	// OpenAI image_url content parts (after the task text). nil = text-only,
+	// byte-identical to prior behavior.
+	TaskImages []llm.ImageURL
 }
 
 type Result struct {
@@ -73,6 +77,24 @@ type Result struct {
 	RepairCount      int
 	ModelUsed        string
 	Output           string // final assistant text of the last turn
+}
+
+// seedMessage builds the initial user message. With no images it is the plain
+// text form; with images it carries OpenAI content parts: the task text
+// followed by one image_url part per image.
+func seedMessage(task string, images []llm.ImageURL) llm.Message {
+	if len(images) == 0 {
+		return llm.Message{Role: "user", Content: task}
+	}
+
+	parts := make([]llm.ContentPart, 0, len(images)+1)
+	parts = append(parts, llm.ContentPart{Type: "text", Text: task})
+	for i := range images {
+		img := images[i]
+		parts = append(parts, llm.ContentPart{Type: "image_url", ImageURL: &img})
+	}
+
+	return llm.Message{Role: "user", ContentParts: parts}
 }
 
 // Run drives the bare agent loop: model call → tool dispatch → repeat, until the
@@ -93,7 +115,7 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 
 	msgs = append(msgs, cfg.History...)
 
-	msgs = append(msgs, llm.Message{Role: "user", Content: task})
+	msgs = append(msgs, seedMessage(task, cfg.TaskImages))
 
 	if cfg.MaxTurns <= 0 && !cfg.Interactive {
 		cfg.MaxTurns = defaultMaxTurns

@@ -754,6 +754,24 @@ func TestRun_EmitsThinkingFromReasoning(t *testing.T) {
 	assert.Less(t, thinkingIdx, modelResponseIdx, "thinking event must be emitted before model_response")
 }
 
+func TestSeedMessage_TextOnly(t *testing.T) {
+	m := seedMessage("do the thing", nil)
+	assert.Equal(t, "user", m.Role)
+	assert.Equal(t, "do the thing", m.Content)
+	assert.Empty(t, m.ContentParts)
+}
+
+func TestSeedMessage_WithImages(t *testing.T) {
+	m := seedMessage("describe", []llm.ImageURL{{URL: "data:image/png;base64,AAAA"}})
+	assert.Equal(t, "user", m.Role)
+	assert.Empty(t, m.Content)
+	require.Len(t, m.ContentParts, 2)
+	assert.Equal(t, llm.ContentPart{Type: "text", Text: "describe"}, m.ContentParts[0])
+	assert.Equal(t, "image_url", m.ContentParts[1].Type)
+	require.NotNil(t, m.ContentParts[1].ImageURL)
+	assert.Equal(t, "data:image/png;base64,AAAA", m.ContentParts[1].ImageURL.URL)
+}
+
 // Case 6: ctx cancel during Wait → Run returns ctx.Err() with Reason canceled.
 func TestInboxCtxCancelDuringWait(t *testing.T) {
 	reg := tools.NewRegistry(tools.NewReadTool(t.TempDir()))
