@@ -29,7 +29,7 @@ func TestGitToolReadOnly(t *testing.T) {
 	gt := NewGitTool(root)
 	out, err := gt.Execute(context.Background(), map[string]any{"subcommand": "status"})
 	require.NoError(t, err)
-	assert.Contains(t, out, "f.txt")
+	assert.Contains(t, out.Text, "f.txt")
 
 	_, err = gt.Execute(context.Background(), map[string]any{"subcommand": "commit", "args": []any{"-m", "x"}})
 	require.Error(t, err)

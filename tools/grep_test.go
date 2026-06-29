@@ -22,12 +22,12 @@ func TestGrepTool(t *testing.T) {
 
 	out, err := NewGrepTool(root).Execute(context.Background(), map[string]any{"pattern": "Encode"})
 	require.NoError(t, err)
-	assert.Contains(t, out, "a.go")
-	assert.Contains(t, out, "Encode")
+	assert.Contains(t, out.Text, "a.go")
+	assert.Contains(t, out.Text, "Encode")
 
 	out, err = NewGrepTool(root).Execute(context.Background(), map[string]any{"pattern": "no-such-token-xyz"})
 	require.NoError(t, err)
-	assert.Contains(t, out, "no matches")
+	assert.Contains(t, out.Text, "no matches")
 }
 
 func TestGrepToolDashPattern(t *testing.T) {
@@ -40,5 +40,5 @@ func TestGrepToolDashPattern(t *testing.T) {
 
 	out, err := NewGrepTool(root).Execute(context.Background(), map[string]any{"pattern": "-b"})
 	require.NoError(t, err)
-	assert.Contains(t, out, "a-b-c")
+	assert.Contains(t, out.Text, "a-b-c")
 }

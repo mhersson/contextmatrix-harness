@@ -16,15 +16,15 @@ func TestWriteToolCreatesAndOverwrites(t *testing.T) {
 
 	out, err := wt.Execute(context.Background(), map[string]any{"path": "a.txt", "content": "one\ntwo\n"})
 	require.NoError(t, err)
-	assert.Contains(t, out, "created a.txt")
+	assert.Contains(t, out.Text, "created a.txt")
 
 	b, _ := os.ReadFile(filepath.Join(root, "a.txt"))
 	assert.Equal(t, "one\ntwo\n", string(b))
 
 	out, err = wt.Execute(context.Background(), map[string]any{"path": "a.txt", "content": "one\nTWO\n"})
 	require.NoError(t, err)
-	assert.Contains(t, out, "-two")
-	assert.Contains(t, out, "+TWO")
+	assert.Contains(t, out.Text, "-two")
+	assert.Contains(t, out.Text, "+TWO")
 }
 
 func TestWriteToolCreateDirs(t *testing.T) {

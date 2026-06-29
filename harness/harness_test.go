@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -213,8 +214,8 @@ func (b *bigTool) Schema() llm.Tool {
 	return llm.Tool{Type: "function", Function: llm.ToolFunction{Name: "big"}}
 }
 
-func (b *bigTool) Execute(_ context.Context, _ map[string]any) (string, error) {
-	return b.output, nil
+func (b *bigTool) Execute(_ context.Context, _ map[string]any) (tools.Result, error) {
+	return tools.Result{Text: b.output}, nil
 }
 
 // capturingLLMSeq records all requests; scripted responses are returned in order.
@@ -296,8 +297,8 @@ func (s *secretTool) Schema() llm.Tool {
 	return llm.Tool{Type: "function", Function: llm.ToolFunction{Name: "secret"}}
 }
 
-func (s *secretTool) Execute(_ context.Context, _ map[string]any) (string, error) {
-	return "output contains " + s.secret + " end", nil
+func (s *secretTool) Execute(_ context.Context, _ map[string]any) (tools.Result, error) {
+	return tools.Result{Text: "output contains " + s.secret + " end"}, nil
 }
 
 func TestRunRedactToolOutput(t *testing.T) {
@@ -353,8 +354,8 @@ func (e *erroringTool) Schema() llm.Tool {
 	return llm.Tool{Type: "function", Function: llm.ToolFunction{Name: "boom"}}
 }
 
-func (e *erroringTool) Execute(_ context.Context, _ map[string]any) (string, error) {
-	return "", errors.New(e.msg)
+func (e *erroringTool) Execute(_ context.Context, _ map[string]any) (tools.Result, error) {
+	return tools.Result{}, errors.New(e.msg)
 }
 
 func TestRunToolErrorOutputCappedAndRedacted(t *testing.T) {
@@ -614,13 +615,13 @@ func (i *interjectingTool) Schema() llm.Tool {
 	return llm.Tool{Type: "function", Function: llm.ToolFunction{Name: "interject"}}
 }
 
-func (i *interjectingTool) Execute(_ context.Context, _ map[string]any) (string, error) {
+func (i *interjectingTool) Execute(_ context.Context, _ map[string]any) (tools.Result, error) {
 	i.calls++
 	if i.calls == 1 {
 		i.inbox.push(i.msg)
 	}
 
-	return "ok", nil
+	return tools.Result{Text: "ok"}, nil
 }
 
 // Case 5: mid-batch interrupt. Turn 1 has three tool calls; the first pushes a
@@ -794,4 +795,252 @@ func TestInboxCtxCancelDuringWait(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 	assert.Equal(t, "canceled", res.Reason)
 	assert.False(t, res.Completed)
+}
+
+// imageTool returns text plus one inline image (models an MCP get_card result).
+type imageTool struct{}
+
+func (imageTool) Name() string { return "img" }
+func (imageTool) Schema() llm.Tool {
+	return llm.Tool{Type: "function", Function: llm.ToolFunction{Name: "img"}}
+}
+
+func (imageTool) Execute(_ context.Context, _ map[string]any) (tools.Result, error) {
+	return tools.Result{Text: "card text", Images: []llm.ImageURL{{URL: "data:image/png;base64,AAAA"}}}, nil
+}
+
+func TestRunInjectsToolImagesAsUserMessage(t *testing.T) {
+	reg := tools.NewRegistry(imageTool{})
+	capt := &capturingLLMSeq{responses: []llm.Response{
+		{ToolCalls: []llm.ToolCall{toolCall("1", "img", `{}`)}},
+		{Content: "done", FinishReason: "stop"},
+	}}
+
+	_, err := Run(context.Background(), capt, reg, newEmitter(), "describe the card", Config{MaxTurns: 10})
+	require.NoError(t, err)
+
+	require.Len(t, capt.requests, 2)
+	second := capt.requests[1].Messages
+
+	text, ok := findToolResult(second, "1")
+	require.True(t, ok)
+	assert.Equal(t, "card text", text)
+
+	toolIdx := -1
+
+	for i, m := range second {
+		if m.Role == "tool" && m.ToolCallID == "1" {
+			toolIdx = i
+
+			break
+		}
+	}
+
+	require.GreaterOrEqual(t, toolIdx, 0)
+
+	uIdx := userMessageIndexAfter(second, toolIdx)
+	require.GreaterOrEqual(t, uIdx, 0, "synthetic image user message not found after tool result")
+
+	img := second[uIdx]
+	require.Len(t, img.ContentParts, 2)
+	assert.Equal(t, "text", img.ContentParts[0].Type)
+	assert.Equal(t, toolImagePreamble, img.ContentParts[0].Text)
+	assert.Equal(t, "image_url", img.ContentParts[1].Type)
+	require.NotNil(t, img.ContentParts[1].ImageURL)
+	assert.Equal(t, "data:image/png;base64,AAAA", img.ContentParts[1].ImageURL.URL)
+}
+
+func TestRunNoImageMessageWhenToolReturnsNoImages(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "f.txt"), []byte("data"), 0o644))
+	reg := tools.NewRegistry(tools.NewReadTool(root))
+
+	capt := &capturingLLMSeq{responses: []llm.Response{
+		{ToolCalls: []llm.ToolCall{toolCall("1", "read", `{"path":"f.txt"}`)}},
+		{Content: "done", FinishReason: "stop"},
+	}}
+
+	_, err := Run(context.Background(), capt, reg, newEmitter(), "task", Config{MaxTurns: 10})
+	require.NoError(t, err)
+
+	require.Len(t, capt.requests, 2)
+	second := capt.requests[1].Messages
+
+	toolIdx := -1
+
+	for i, m := range second {
+		if m.Role == "tool" && m.ToolCallID == "1" {
+			toolIdx = i
+
+			break
+		}
+	}
+
+	require.GreaterOrEqual(t, toolIdx, 0)
+	assert.Equal(t, -1, userMessageIndexAfter(second, toolIdx), "text-only tool result must not append a user message")
+}
+
+// imageInterjectTool both returns an image and pushes an interjection to the
+// inbox on its first call — models the mid-batch-interrupt + image injection
+// combination.
+type imageInterjectTool struct {
+	inbox *scriptedInbox
+	msg   UserMessage
+	calls int
+}
+
+func (t *imageInterjectTool) Name() string { return "imginterject" }
+func (t *imageInterjectTool) Schema() llm.Tool {
+	return llm.Tool{Type: "function", Function: llm.ToolFunction{Name: "imginterject"}}
+}
+
+func (t *imageInterjectTool) Execute(_ context.Context, _ map[string]any) (tools.Result, error) {
+	t.calls++
+	if t.calls == 1 {
+		t.inbox.push(t.msg)
+	}
+
+	return tools.Result{Text: "card text", Images: []llm.ImageURL{{URL: "data:image/png;base64,AAAA"}}}, nil
+}
+
+// TestImageInterjectOrdering proves that on a mid-batch interrupt where the
+// executing tool also returns an image, the next request carries messages in
+// this order: all tool results → synthetic image user message → human
+// interjection user message.
+func TestImageInterjectOrdering(t *testing.T) {
+	inbox := &scriptedInbox{closeErr: ErrInboxClosed}
+	it := &imageInterjectTool{inbox: inbox, msg: UserMessage{Content: "stop and look", MessageID: "m1"}}
+	reg := tools.NewRegistry(it)
+
+	capt := &capturingLLMSeq{responses: []llm.Response{
+		{ToolCalls: []llm.ToolCall{
+			toolCall("1", "imginterject", `{}`),
+			toolCall("2", "imginterject", `{}`),
+		}},
+		{Content: "done", FinishReason: "stop"},
+	}}
+
+	res, err := Run(context.Background(), capt, reg, newEmitter(), "task", Config{MaxTurns: 10, Inbox: inbox})
+	require.NoError(t, err)
+	assert.True(t, res.Completed)
+
+	// Call 1 executes; call 2 must be skipped.
+	assert.Equal(t, 1, it.calls, "only call 1 must execute; call 2 is skipped")
+
+	require.Len(t, capt.requests, 2)
+	second := capt.requests[1].Messages
+
+	// Both tool results must be present.
+	c1, ok := findToolResult(second, "1")
+	require.True(t, ok, "tool result '1' missing")
+	assert.Equal(t, "card text", c1)
+
+	c2, ok := findToolResult(second, "2")
+	require.True(t, ok, "tool result '2' missing")
+	assert.Equal(t, "skipped: user interjected", c2)
+
+	// Locate the last tool-role message.
+	lastToolIdx := -1
+
+	for i, m := range second {
+		if m.Role == "tool" && (m.ToolCallID == "1" || m.ToolCallID == "2") {
+			lastToolIdx = i
+		}
+	}
+
+	require.GreaterOrEqual(t, lastToolIdx, 0)
+
+	// Synthetic image user message must follow all tool results.
+	imgIdx := userMessageIndexAfter(second, lastToolIdx)
+	require.GreaterOrEqual(t, imgIdx, 0, "synthetic image user message not found after tool results")
+
+	img := second[imgIdx]
+	require.Len(t, img.ContentParts, 2, "expected preamble + 1 image part")
+	assert.Equal(t, "text", img.ContentParts[0].Type)
+	assert.Equal(t, toolImagePreamble, img.ContentParts[0].Text)
+	assert.Equal(t, "image_url", img.ContentParts[1].Type)
+	require.NotNil(t, img.ContentParts[1].ImageURL)
+	assert.Equal(t, "data:image/png;base64,AAAA", img.ContentParts[1].ImageURL.URL)
+
+	// Human interjection must follow the image message.
+	interjIdx := userMessageIndexAfter(second, imgIdx+1)
+	require.GreaterOrEqual(t, interjIdx, 0, "interjection user message not found after image message")
+	assert.Equal(t, "stop and look", second[interjIdx].Content)
+	assert.Empty(t, second[interjIdx].ContentParts, "interjection must be plain text")
+
+	// The crux: image index < interjection index, both after all tool results.
+	assert.Less(t, lastToolIdx, imgIdx, "image message must follow all tool results")
+	assert.Less(t, imgIdx, interjIdx, "image message must precede the human interjection")
+}
+
+// multiImageTool returns a distinct image URL per call.
+type multiImageTool struct{ calls int }
+
+func (t *multiImageTool) Name() string { return "multimg" }
+func (t *multiImageTool) Schema() llm.Tool {
+	return llm.Tool{Type: "function", Function: llm.ToolFunction{Name: "multimg"}}
+}
+
+func (t *multiImageTool) Execute(_ context.Context, _ map[string]any) (tools.Result, error) {
+	t.calls++
+
+	return tools.Result{
+		Text:   fmt.Sprintf("img %d", t.calls),
+		Images: []llm.ImageURL{{URL: fmt.Sprintf("data:image/png;base64,IMG%d", t.calls)}},
+	}, nil
+}
+
+// TestMultiImageAggregation proves that two image-bearing tool calls in one
+// turn produce exactly one synthetic user message carrying both images
+// (preamble + 2 image parts).
+func TestMultiImageAggregation(t *testing.T) {
+	mt := &multiImageTool{}
+	reg := tools.NewRegistry(mt)
+
+	capt := &capturingLLMSeq{responses: []llm.Response{
+		{ToolCalls: []llm.ToolCall{
+			toolCall("1", "multimg", `{}`),
+			toolCall("2", "multimg", `{}`),
+		}},
+		{Content: "done", FinishReason: "stop"},
+	}}
+
+	_, err := Run(context.Background(), capt, reg, newEmitter(), "task", Config{MaxTurns: 10})
+	require.NoError(t, err)
+
+	require.Len(t, capt.requests, 2)
+	second := capt.requests[1].Messages
+
+	// Locate the last tool-role message.
+	lastToolIdx := -1
+
+	for i, m := range second {
+		if m.Role == "tool" && (m.ToolCallID == "1" || m.ToolCallID == "2") {
+			lastToolIdx = i
+		}
+	}
+
+	require.GreaterOrEqual(t, lastToolIdx, 0)
+
+	// Exactly one user message with ContentParts must follow the tool results.
+	var imageMsgs []llm.Message
+
+	for i := lastToolIdx + 1; i < len(second); i++ {
+		if second[i].Role == "user" && len(second[i].ContentParts) > 0 {
+			imageMsgs = append(imageMsgs, second[i])
+		}
+	}
+
+	require.Len(t, imageMsgs, 1, "expected exactly one synthetic image user message")
+
+	img := imageMsgs[0]
+	require.Len(t, img.ContentParts, 3, "preamble + 2 image parts expected")
+	assert.Equal(t, "text", img.ContentParts[0].Type)
+	assert.Equal(t, toolImagePreamble, img.ContentParts[0].Text)
+	assert.Equal(t, "image_url", img.ContentParts[1].Type)
+	require.NotNil(t, img.ContentParts[1].ImageURL)
+	assert.Equal(t, "data:image/png;base64,IMG1", img.ContentParts[1].ImageURL.URL)
+	assert.Equal(t, "image_url", img.ContentParts[2].Type)
+	require.NotNil(t, img.ContentParts[2].ImageURL)
+	assert.Equal(t, "data:image/png;base64,IMG2", img.ContentParts[2].ImageURL.URL)
 }

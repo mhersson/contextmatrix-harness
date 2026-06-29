@@ -59,10 +59,10 @@ func (t BashTool) Schema() llm.Tool {
 	}}
 }
 
-func (t BashTool) Execute(ctx context.Context, args map[string]any) (string, error) {
+func (t BashTool) Execute(ctx context.Context, args map[string]any) (Result, error) {
 	command, err := requireString(args, "command")
 	if err != nil {
-		return "", err
+		return Result{}, err
 	}
 
 	timeout := optInt(args, "timeout_seconds", 30)
@@ -88,7 +88,7 @@ func (t BashTool) Execute(ctx context.Context, args map[string]any) (string, err
 	cmd.Stderr = &buf
 
 	if err := cmd.Start(); err != nil {
-		return "", fmt.Errorf("start command: %w", err)
+		return Result{}, fmt.Errorf("start command: %w", err)
 	}
 
 	pgid := cmd.Process.Pid
@@ -106,19 +106,19 @@ func (t BashTool) Execute(ctx context.Context, args map[string]any) (string, err
 
 		<-done
 
-		return buf.String() + fmt.Sprintf("\n[command timed out after %ds]", timeout), nil
+		return Result{Text: buf.String() + fmt.Sprintf("\n[command timed out after %ds]", timeout)}, nil
 	case <-ctx.Done():
 		_ = syscall.Kill(-pgid, syscall.SIGKILL) //nolint:errcheck
 
 		<-done
 
-		return buf.String(), ctx.Err()
+		return Result{Text: buf.String()}, ctx.Err()
 	case werr := <-done:
 		res := buf.String()
 		if werr != nil {
 			res += fmt.Sprintf("\n[command exited with error: %v]", werr)
 		}
 
-		return res, nil
+		return Result{Text: res}, nil
 	}
 }

@@ -33,43 +33,43 @@ func (t EditTool) Schema() llm.Tool {
 	}}
 }
 
-func (t EditTool) Execute(_ context.Context, args map[string]any) (string, error) {
+func (t EditTool) Execute(_ context.Context, args map[string]any) (Result, error) {
 	rel, err := requireString(args, "path")
 	if err != nil {
-		return "", err
+		return Result{}, err
 	}
 
 	oldStr, err := requireString(args, "old_string")
 	if err != nil {
-		return "", err
+		return Result{}, err
 	}
 
 	newStr, err := requireString(args, "new_string")
 	if err != nil {
-		return "", err
+		return Result{}, err
 	}
 
 	replaceAll := optBool(args, "replace_all")
 
 	abs, err := resolveInRoot(t.root, rel)
 	if err != nil {
-		return "", err
+		return Result{}, err
 	}
 
 	b, err := os.ReadFile(abs)
 	if err != nil {
-		return "", err
+		return Result{}, err
 	}
 
 	content := string(b)
 
 	n := strings.Count(content, oldStr)
 	if n == 0 {
-		return "", fmt.Errorf("old_string not found in %s", rel)
+		return Result{}, fmt.Errorf("old_string not found in %s", rel)
 	}
 
 	if n > 1 && !replaceAll {
-		return "", fmt.Errorf("old_string appears %d times in %s; set replace_all or provide a unique string", n, rel)
+		return Result{}, fmt.Errorf("old_string appears %d times in %s; set replace_all or provide a unique string", n, rel)
 	}
 
 	if replaceAll {
@@ -79,8 +79,8 @@ func (t EditTool) Execute(_ context.Context, args map[string]any) (string, error
 	}
 
 	if err := os.WriteFile(abs, []byte(content), 0o644); err != nil { //nolint:gosec // G703: abs is jail-resolved by resolveInRoot above
-		return "", err
+		return Result{}, err
 	}
 
-	return fmt.Sprintf("edited %s (%d replacement(s))", rel, n), nil
+	return Result{Text: fmt.Sprintf("edited %s (%d replacement(s))", rel, n)}, nil
 }

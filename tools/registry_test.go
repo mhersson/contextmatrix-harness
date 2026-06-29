@@ -17,7 +17,10 @@ func (s stubTool) Name() string { return s.name }
 func (s stubTool) Schema() llm.Tool {
 	return llm.Tool{Type: "function", Function: llm.ToolFunction{Name: s.name}}
 }
-func (s stubTool) Execute(ctx context.Context, args map[string]any) (string, error) { return "ok", nil }
+
+func (s stubTool) Execute(ctx context.Context, args map[string]any) (Result, error) {
+	return Result{Text: "ok"}, nil
+}
 
 func TestRegistryGetAndOrderedSchemas(t *testing.T) {
 	r := NewRegistry(stubTool{"read"}, stubTool{"edit"})
@@ -90,4 +93,28 @@ func TestOptionalArgAccessors(t *testing.T) {
 	assert.Equal(t, 5, optInt(args, "f", 0)) // JSON number → float64 path
 	assert.Equal(t, 3, optInt(args, "i", 0)) // int path
 	assert.Equal(t, 7, optInt(args, "missing", 7))
+}
+
+type imageStub struct{}
+
+func (imageStub) Name() string { return "img" }
+func (imageStub) Schema() llm.Tool {
+	return llm.Tool{Type: "function", Function: llm.ToolFunction{Name: "img"}}
+}
+
+func (imageStub) Execute(context.Context, map[string]any) (Result, error) {
+	return Result{Text: "see image", Images: []llm.ImageURL{{URL: "data:image/png;base64,AAAA"}}}, nil
+}
+
+func TestRegistryToolReturnsImages(t *testing.T) {
+	r := NewRegistry(imageStub{})
+
+	tool, ok := r.Get("img")
+	require.True(t, ok)
+
+	res, err := tool.Execute(context.Background(), nil)
+	require.NoError(t, err)
+	assert.Equal(t, "see image", res.Text)
+	require.Len(t, res.Images, 1)
+	assert.Equal(t, "data:image/png;base64,AAAA", res.Images[0].URL)
 }
