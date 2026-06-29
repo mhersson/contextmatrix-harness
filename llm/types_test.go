@@ -36,3 +36,40 @@ func TestResponseToleratesUnknownFields(t *testing.T) {
 	assert.Equal(t, "m", nr.Model)
 	assert.InEpsilon(t, 0.0001, nr.Usage.Cost, 1e-9)
 }
+
+func TestMessageMarshalJSON_TextOnly(t *testing.T) {
+	b, err := json.Marshal(Message{Role: "user", Content: "hello"})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"role":"user","content":"hello"}`, string(b))
+}
+
+func TestMessageMarshalJSON_ToolCallsOmitEmptyContent(t *testing.T) {
+	m := Message{Role: "assistant", ToolCalls: []ToolCall{
+		{ID: "1", Type: "function", Function: FunctionCall{Name: "x", Arguments: "{}"}},
+	}}
+	b, err := json.Marshal(m)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"role":"assistant","tool_calls":[{"id":"1","type":"function","function":{"name":"x","arguments":"{}"}}]}`, string(b))
+}
+
+func TestMessageMarshalJSON_ContentParts(t *testing.T) {
+	m := Message{Role: "user", ContentParts: []ContentPart{
+		{Type: "text", Text: "describe this"},
+		{Type: "image_url", ImageURL: &ImageURL{URL: "data:image/png;base64,AAAA"}},
+	}}
+	b, err := json.Marshal(m)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"role":"user","content":[
+		{"type":"text","text":"describe this"},
+		{"type":"image_url","image_url":{"url":"data:image/png;base64,AAAA"}}
+	]}`, string(b))
+}
+
+func TestMessageMarshalJSON_OpenAIImageShapeNotAnthropic(t *testing.T) {
+	b, err := json.Marshal(Message{Role: "user", ContentParts: []ContentPart{
+		{Type: "image_url", ImageURL: &ImageURL{URL: "data:image/png;base64,AAAA"}},
+	}})
+	require.NoError(t, err)
+	assert.Contains(t, string(b), `"image_url"`)
+	assert.NotContains(t, string(b), `"source"`) // not the Anthropic content-block shape
+}

@@ -10,11 +10,50 @@ import (
 
 // Message is one chat message (OpenAI-compatible).
 type Message struct {
-	Role       string     `json:"role"`
-	Content    string     `json:"content,omitempty"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
-	Name       string     `json:"name,omitempty"`
+	Role         string        `json:"role"`
+	Content      string        `json:"content,omitempty"`
+	ContentParts []ContentPart `json:"-"`
+	ToolCalls    []ToolCall    `json:"tool_calls,omitempty"`
+	ToolCallID   string        `json:"tool_call_id,omitempty"`
+	Name         string        `json:"name,omitempty"`
+}
+
+// MarshalJSON emits `content` as the parts array when ContentParts is set,
+// otherwise as the string Content (byte-identical to the prior wire form).
+// When both are empty (e.g. a tool-call-only assistant message) `content` is
+// omitted, exactly as before.
+func (m Message) MarshalJSON() ([]byte, error) {
+	type wire struct {
+		Role       string     `json:"role"`
+		Content    any        `json:"content,omitempty"`
+		ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+		ToolCallID string     `json:"tool_call_id,omitempty"`
+		Name       string     `json:"name,omitempty"`
+	}
+
+	w := wire{Role: m.Role, ToolCalls: m.ToolCalls, ToolCallID: m.ToolCallID, Name: m.Name}
+	switch {
+	case len(m.ContentParts) > 0:
+		w.Content = m.ContentParts
+	case m.Content != "":
+		w.Content = m.Content
+	}
+
+	return json.Marshal(w)
+}
+
+// ContentPart is one element of a multimodal message content array
+// (OpenAI Chat Completions shape). Type is "text" or "image_url".
+type ContentPart struct {
+	Type     string    `json:"type"`
+	Text     string    `json:"text,omitempty"`
+	ImageURL *ImageURL `json:"image_url,omitempty"`
+}
+
+// ImageURL carries an image as a data URL ("data:<mime>;base64,<data>") or a
+// remote URL, per the OpenAI image_url content part.
+type ImageURL struct {
+	URL string `json:"url"`
 }
 
 type ToolCall struct {
