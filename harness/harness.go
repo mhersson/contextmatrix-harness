@@ -457,6 +457,7 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 		// first, with no user message interleaved). Image context precedes any
 		// human interjection.
 		if len(turnImages) > 0 {
+			// No image count or size cap here; CM's server-side limit (max 10 images, ~20 MiB) is the gate.
 			msgs = append(msgs, imageMessage(turnImages))
 			emit.Emit(events.StateChange, map[string]any{"event": "tool_images", "count": len(turnImages)})
 		}

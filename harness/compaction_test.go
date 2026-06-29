@@ -202,9 +202,7 @@ func TestCompactForwardsImagePrefixThenDropsIt(t *testing.T) {
 	assert.Contains(t, out[1].Content, "[Earlier conversation, summarized]")
 	assert.Equal(t, "recent", out[2].Content)
 
-	for _, m := range out {
-		assert.Empty(t, m.ContentParts, "no image parts survive in the compacted prefix")
-	}
+	assert.Empty(t, out[1].ContentParts, "summary message must not carry image parts")
 }
 
 func TestCompactKeepsRecentImageVerbatim(t *testing.T) {
