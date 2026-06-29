@@ -163,3 +163,69 @@ func TestEffectiveCompactionThreshold(t *testing.T) {
 		})
 	}
 }
+
+func TestCompactForwardsImagePrefixThenDropsIt(t *testing.T) {
+	msgs := []llm.Message{
+		{Role: "system", Content: "SYS"},
+		{Role: "user", Content: "first"},
+		{Role: "assistant", Content: "a1"},
+		{Role: "user", ContentParts: []llm.ContentPart{
+			{Type: "text", Text: "look"},
+			{Type: "image_url", ImageURL: &llm.ImageURL{URL: "data:image/png;base64,AAAA"}},
+		}},
+		{Role: "assistant", Content: "a2"},
+		{Role: "user", Content: "recent"},
+	}
+
+	capt := &capturingLLM{}
+
+	out, err := compact(context.Background(), capt, Config{Model: "m"}, msgs, 1, newEmitter())
+	require.NoError(t, err)
+
+	// (a) The summarizer received the image-bearing prefix verbatim (not stripped).
+	var sawImage bool
+
+	for _, m := range capt.last.Messages {
+		for _, p := range m.ContentParts {
+			if p.Type == "image_url" && p.ImageURL != nil && p.ImageURL.URL == "data:image/png;base64,AAAA" {
+				sawImage = true
+			}
+		}
+	}
+
+	assert.True(t, sawImage, "summarizer must receive the image-bearing prefix verbatim")
+
+	// (b) The prefix (incl. the image message) is replaced by one text summary;
+	// images do not persist past compaction. Result: system + summary + 1 kept.
+	require.Len(t, out, 3)
+	assert.Equal(t, "SYS", out[0].Content)
+	assert.Contains(t, out[1].Content, "[Earlier conversation, summarized]")
+	assert.Equal(t, "recent", out[2].Content)
+
+	for _, m := range out {
+		assert.Empty(t, m.ContentParts, "no image parts survive in the compacted prefix")
+	}
+}
+
+func TestCompactKeepsRecentImageVerbatim(t *testing.T) {
+	imgMsg := llm.Message{Role: "user", ContentParts: []llm.ContentPart{
+		{Type: "text", Text: "look"},
+		{Type: "image_url", ImageURL: &llm.ImageURL{URL: "data:image/png;base64,BBBB"}},
+	}}
+	msgs := []llm.Message{
+		{Role: "system", Content: "SYS"},
+		{Role: "user", Content: "old1"},
+		{Role: "assistant", Content: "a1"},
+		{Role: "user", Content: "old2"},
+		{Role: "assistant", Content: "a2"},
+		imgMsg,
+	}
+
+	out, err := compact(context.Background(), &capturingLLM{}, Config{Model: "m"}, msgs, 1, newEmitter())
+	require.NoError(t, err)
+
+	last := out[len(out)-1]
+	require.Len(t, last.ContentParts, 2)
+	require.NotNil(t, last.ContentParts[1].ImageURL)
+	assert.Equal(t, "data:image/png;base64,BBBB", last.ContentParts[1].ImageURL.URL)
+}
