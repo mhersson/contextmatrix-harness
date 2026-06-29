@@ -32,17 +32,17 @@ func (t GlobTool) Schema() llm.Tool {
 	}}
 }
 
-func (t GlobTool) Execute(ctx context.Context, args map[string]any) (string, error) {
+func (t GlobTool) Execute(ctx context.Context, args map[string]any) (Result, error) {
 	pattern, err := requireString(args, "pattern")
 	if err != nil {
-		return "", err
+		return Result{}, err
 	}
 
 	searchPath := t.root
 	if rel := optString(args, "path", ""); rel != "" {
 		abs, err := resolveInRoot(t.root, rel)
 		if err != nil {
-			return "", err
+			return Result{}, err
 		}
 
 		searchPath = abs
@@ -50,14 +50,14 @@ func (t GlobTool) Execute(ctx context.Context, args map[string]any) (string, err
 
 	rels, err := t.list(ctx, pattern, searchPath)
 	if err != nil {
-		return "", err
+		return Result{}, err
 	}
 
 	if len(rels) == 0 {
-		return "no matches", nil
+		return Result{Text: "no matches"}, nil
 	}
 
-	return strings.Join(rels, "\n"), nil
+	return Result{Text: strings.Join(rels, "\n")}, nil
 }
 
 // list returns the workspace-relative paths matching pattern, preferring fd and

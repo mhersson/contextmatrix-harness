@@ -74,7 +74,7 @@ func TestSkillToolLoadReturnsBodyAndFiresOnEngage(t *testing.T) {
 
 	out, err := st.Execute(context.Background(), map[string]any{"skill": "go-development"})
 	require.NoError(t, err)
-	assert.Contains(t, out, "GO BODY CONTENT", "load returns the SKILL.md body")
+	assert.Contains(t, out.Text, "GO BODY CONTENT", "load returns the SKILL.md body")
 	assert.Equal(t, []string{"go-development"}, engaged, "loading a skill fires onEngage once")
 }
 
@@ -87,7 +87,7 @@ func TestSkillToolUnknownSkillReturnsGuidanceNotError(t *testing.T) {
 
 	out, err := st.Execute(context.Background(), map[string]any{"skill": "nope"})
 	require.NoError(t, err, "an unknown skill is guidance, not a turn-ending error")
-	assert.Contains(t, out, "go-development", "guidance lists the available skills")
+	assert.Contains(t, out.Text, "go-development", "guidance lists the available skills")
 }
 
 func TestSkillToolRejectsPathTraversal(t *testing.T) {
@@ -115,7 +115,7 @@ func TestSkillToolLoadsSupportingFile(t *testing.T) {
 
 	out, err := st.Execute(context.Background(), map[string]any{"skill": "tdd", "file": "anti-patterns.md"})
 	require.NoError(t, err)
-	assert.Contains(t, out, "ANTIPATTERNS", "the optional file arg loads a supporting file within the skill dir")
+	assert.Contains(t, out.Text, "ANTIPATTERNS", "the optional file arg loads a supporting file within the skill dir")
 }
 
 func TestSkillToolName(t *testing.T) {

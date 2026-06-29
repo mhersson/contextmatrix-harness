@@ -8,10 +8,19 @@ import (
 	"github.com/mhersson/contextmatrix-harness/llm"
 )
 
+// Result is the outcome of a Tool.Execute call: the textual output every tool
+// produces, plus optional inline images (OpenAI image_url data URLs). Images is
+// nil for the filesystem/shell tools; only MCP-bridged tools that surface
+// ImageContent populate it.
+type Result struct {
+	Text   string
+	Images []llm.ImageURL
+}
+
 type Tool interface {
 	Name() string
 	Schema() llm.Tool
-	Execute(ctx context.Context, args map[string]any) (string, error)
+	Execute(ctx context.Context, args map[string]any) (Result, error)
 }
 
 type Registry struct {

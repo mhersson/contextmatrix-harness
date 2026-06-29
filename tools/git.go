@@ -36,14 +36,14 @@ func (t GitTool) Schema() llm.Tool {
 	}}
 }
 
-func (t GitTool) Execute(ctx context.Context, args map[string]any) (string, error) {
+func (t GitTool) Execute(ctx context.Context, args map[string]any) (Result, error) {
 	sub, err := requireString(args, "subcommand")
 	if err != nil {
-		return "", err
+		return Result{}, err
 	}
 
 	if !readonlyGitSubcommands[sub] {
-		return "", fmt.Errorf("git subcommand %q is not allowed (read-only: status, diff, log, show, branch)", sub)
+		return Result{}, fmt.Errorf("git subcommand %q is not allowed (read-only: status, diff, log, show, branch)", sub)
 	}
 
 	cmdArgs := append([]string{sub}, optStringSlice(args, "args")...)
@@ -54,11 +54,11 @@ func (t GitTool) Execute(ctx context.Context, args map[string]any) (string, erro
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		if _, ok := err.(*exec.ExitError); ok {
-			return string(out), nil // surface git's own message as output, not a hard failure
+			return Result{Text: string(out)}, nil // surface git's own message as output, not a hard failure
 		}
 
-		return "", fmt.Errorf("git failed: %v", err)
+		return Result{}, fmt.Errorf("git failed: %v", err)
 	}
 
-	return string(out), nil
+	return Result{Text: string(out)}, nil
 }

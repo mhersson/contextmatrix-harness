@@ -54,30 +54,30 @@ func (t ReadTool) Schema() llm.Tool {
 	}}
 }
 
-func (t ReadTool) Execute(_ context.Context, args map[string]any) (string, error) {
+func (t ReadTool) Execute(_ context.Context, args map[string]any) (Result, error) {
 	rel, err := requireString(args, "path")
 	if err != nil {
-		return "", err
+		return Result{}, err
 	}
 
 	abs, err := resolveInRoot(t.root, rel)
 	if err != nil {
-		return "", err
+		return Result{}, err
 	}
 
 	f, err := os.Open(abs)
 	if err != nil {
-		return "", fmt.Errorf("read %s: %w", rel, err)
+		return Result{}, fmt.Errorf("read %s: %w", rel, err)
 	}
 	defer f.Close()
 
 	fi, err := f.Stat()
 	if err != nil {
-		return "", fmt.Errorf("stat %s: %w", rel, err)
+		return Result{}, fmt.Errorf("stat %s: %w", rel, err)
 	}
 
 	if fi.IsDir() {
-		return "", fmt.Errorf("read %s: is a directory", rel)
+		return Result{}, fmt.Errorf("read %s: is a directory", rel)
 	}
 
 	// Sniff for binary content without reading the whole file. A short or
@@ -87,24 +87,24 @@ func (t ReadTool) Execute(_ context.Context, args map[string]any) (string, error
 
 	n, err := f.Read(sniff)
 	if err != nil && !errors.Is(err, io.EOF) {
-		return "", fmt.Errorf("read %s: %w", rel, err)
+		return Result{}, fmt.Errorf("read %s: %w", rel, err)
 	}
 
 	sniff = sniff[:n]
 
 	if looksBinary(sniff) {
-		return fmt.Sprintf("[binary file: %s, %d bytes — not shown]", rel, fi.Size()), nil
+		return Result{Text: fmt.Sprintf("[binary file: %s, %d bytes — not shown]", rel, fi.Size())}, nil
 	}
 
 	// Text path: rewind and read the whole file fresh (the sniff consumed the
 	// first chunk). Avoids aliasing the sniff buffer's backing array.
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return "", fmt.Errorf("read %s: %w", rel, err)
+		return Result{}, fmt.Errorf("read %s: %w", rel, err)
 	}
 
 	b, err := io.ReadAll(f)
 	if err != nil {
-		return "", fmt.Errorf("read %s: %w", rel, err)
+		return Result{}, fmt.Errorf("read %s: %w", rel, err)
 	}
 
 	offset := optInt(args, "offset", 0)
@@ -170,7 +170,7 @@ func (t ReadTool) Execute(_ context.Context, args map[string]any) (string, error
 
 	// If no lines fit (e.g. start == end), return empty with no hint.
 	if cappedEnd == start && !byteCapped {
-		return "", nil
+		return Result{}, nil
 	}
 
 	var out strings.Builder
@@ -205,5 +205,5 @@ func (t ReadTool) Execute(_ context.Context, args map[string]any) (string, error
 		}
 	}
 
-	return out.String(), nil
+	return Result{Text: out.String()}, nil
 }

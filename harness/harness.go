@@ -89,6 +89,7 @@ func seedMessage(task string, images []llm.ImageURL) llm.Message {
 
 	parts := make([]llm.ContentPart, 0, len(images)+1)
 	parts = append(parts, llm.ContentPart{Type: "text", Text: task})
+
 	for i := range images {
 		img := images[i]
 		parts = append(parts, llm.ContentPart{Type: "image_url", ImageURL: &img})
@@ -356,13 +357,14 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 					return
 				}
 
+				text := out.Text
 				if cfg.RedactToolOutput != nil {
-					out = cfg.RedactToolOutput(out)
+					text = cfg.RedactToolOutput(text)
 				}
 
-				out = tools.HeadTail(out, cfg.ToolOutputMaxBytes)
-				msgs = append(msgs, toolResultMsg(tc.ID, out))
-				emit.Emit(events.ToolResult, map[string]any{"id": tc.ID, "output_len": len(out)})
+				text = tools.HeadTail(text, cfg.ToolOutputMaxBytes)
+				msgs = append(msgs, toolResultMsg(tc.ID, text))
+				emit.Emit(events.ToolResult, map[string]any{"id": tc.ID, "output_len": len(text)})
 			}()
 
 			// Drain mid-batch only if there are remaining calls to skip.

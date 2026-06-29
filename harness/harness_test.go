@@ -213,8 +213,8 @@ func (b *bigTool) Schema() llm.Tool {
 	return llm.Tool{Type: "function", Function: llm.ToolFunction{Name: "big"}}
 }
 
-func (b *bigTool) Execute(_ context.Context, _ map[string]any) (string, error) {
-	return b.output, nil
+func (b *bigTool) Execute(_ context.Context, _ map[string]any) (tools.Result, error) {
+	return tools.Result{Text: b.output}, nil
 }
 
 // capturingLLMSeq records all requests; scripted responses are returned in order.
@@ -296,8 +296,8 @@ func (s *secretTool) Schema() llm.Tool {
 	return llm.Tool{Type: "function", Function: llm.ToolFunction{Name: "secret"}}
 }
 
-func (s *secretTool) Execute(_ context.Context, _ map[string]any) (string, error) {
-	return "output contains " + s.secret + " end", nil
+func (s *secretTool) Execute(_ context.Context, _ map[string]any) (tools.Result, error) {
+	return tools.Result{Text: "output contains " + s.secret + " end"}, nil
 }
 
 func TestRunRedactToolOutput(t *testing.T) {
@@ -353,8 +353,8 @@ func (e *erroringTool) Schema() llm.Tool {
 	return llm.Tool{Type: "function", Function: llm.ToolFunction{Name: "boom"}}
 }
 
-func (e *erroringTool) Execute(_ context.Context, _ map[string]any) (string, error) {
-	return "", errors.New(e.msg)
+func (e *erroringTool) Execute(_ context.Context, _ map[string]any) (tools.Result, error) {
+	return tools.Result{}, errors.New(e.msg)
 }
 
 func TestRunToolErrorOutputCappedAndRedacted(t *testing.T) {
@@ -614,13 +614,13 @@ func (i *interjectingTool) Schema() llm.Tool {
 	return llm.Tool{Type: "function", Function: llm.ToolFunction{Name: "interject"}}
 }
 
-func (i *interjectingTool) Execute(_ context.Context, _ map[string]any) (string, error) {
+func (i *interjectingTool) Execute(_ context.Context, _ map[string]any) (tools.Result, error) {
 	i.calls++
 	if i.calls == 1 {
 		i.inbox.push(i.msg)
 	}
 
-	return "ok", nil
+	return tools.Result{Text: "ok"}, nil
 }
 
 // Case 5: mid-batch interrupt. Turn 1 has three tool calls; the first pushes a

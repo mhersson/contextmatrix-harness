@@ -26,13 +26,13 @@ func TestGlobTool(t *testing.T) {
 
 	out, err := NewGlobTool(root).Execute(context.Background(), map[string]any{"pattern": "*.go"})
 	require.NoError(t, err)
-	assert.Contains(t, out, "a.go")
-	assert.Contains(t, out, filepath.Join("sub", "b.go"))
-	assert.NotContains(t, out, "c.txt")
+	assert.Contains(t, out.Text, "a.go")
+	assert.Contains(t, out.Text, filepath.Join("sub", "b.go"))
+	assert.NotContains(t, out.Text, "c.txt")
 
 	out, err = NewGlobTool(root).Execute(context.Background(), map[string]any{"pattern": "*.nope"})
 	require.NoError(t, err)
-	assert.Contains(t, out, "no matches")
+	assert.Contains(t, out.Text, "no matches")
 }
 
 func TestGlobToolRespectsGitignore(t *testing.T) {
@@ -56,8 +56,8 @@ func TestGlobToolRespectsGitignore(t *testing.T) {
 
 	out, err := NewGlobTool(root).Execute(context.Background(), map[string]any{"pattern": "*.go"})
 	require.NoError(t, err)
-	assert.Contains(t, out, "kept.go")
-	assert.NotContains(t, out, "ignored.go")
+	assert.Contains(t, out.Text, "kept.go")
+	assert.NotContains(t, out.Text, "ignored.go")
 }
 
 func TestFilterByGlob(t *testing.T) {

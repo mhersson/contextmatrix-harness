@@ -249,4 +249,7 @@ func (skillStub) Name() string { return "skill" }
 func (skillStub) Schema() llm.Tool {
 	return llm.Tool{Type: "function", Function: llm.ToolFunction{Name: "skill"}}
 }
-func (skillStub) Execute(context.Context, map[string]any) (string, error) { return "", nil }
+
+func (skillStub) Execute(context.Context, map[string]any) (tools.Result, error) {
+	return tools.Result{}, nil
+}

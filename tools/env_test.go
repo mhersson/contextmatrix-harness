@@ -33,6 +33,6 @@ func TestBashToolDoesNotLeakEnv(t *testing.T) {
 	tool := NewBashTool(t.TempDir())
 	out, err := tool.Execute(context.Background(), map[string]any{"command": "env"})
 	require.NoError(t, err)
-	assert.NotContains(t, out, "sk-leakcheck")
-	assert.Contains(t, out, "PATH=")
+	assert.NotContains(t, out.Text, "sk-leakcheck")
+	assert.Contains(t, out.Text, "PATH=")
 }

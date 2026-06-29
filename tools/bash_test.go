@@ -15,7 +15,7 @@ func TestBashToolRunsInRoot(t *testing.T) {
 	root := t.TempDir()
 	out, err := NewBashTool(root).Execute(context.Background(), map[string]any{"command": "pwd"})
 	require.NoError(t, err)
-	assert.Contains(t, out, root)
+	assert.Contains(t, out.Text, root)
 }
 
 func TestBashToolReturnsFailureAsOutputNotError(t *testing.T) {
@@ -23,14 +23,14 @@ func TestBashToolReturnsFailureAsOutputNotError(t *testing.T) {
 	// A failing command must NOT return a Go error — the model needs to see it.
 	out, err := NewBashTool(root).Execute(context.Background(), map[string]any{"command": "exit 3"})
 	require.NoError(t, err)
-	assert.Contains(t, out, "exit")
+	assert.Contains(t, out.Text, "exit")
 }
 
 func TestBashToolTimeout(t *testing.T) {
 	root := t.TempDir()
 	out, err := NewBashTool(root).Execute(context.Background(), map[string]any{"command": "sleep 5", "timeout_seconds": 1.0})
 	require.NoError(t, err)
-	assert.Contains(t, out, "timed out")
+	assert.Contains(t, out.Text, "timed out")
 }
 
 func TestBashTimeoutClamp(t *testing.T) {
@@ -42,7 +42,7 @@ func TestBashTimeoutClamp(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Less(t, time.Since(start), 5*time.Second)
-	assert.Contains(t, out, "timed out after 1s")
+	assert.Contains(t, out.Text, "timed out after 1s")
 }
 
 func TestBashWithMaxTimeout(t *testing.T) {
@@ -77,8 +77,8 @@ func TestBashToolKillsProcessGroupOnTimeout(t *testing.T) {
 		"timeout_seconds": 1.0,
 	})
 	require.NoError(t, err)
-	assert.Contains(t, out, "started")
-	assert.Contains(t, out, "timed out")
+	assert.Contains(t, out.Text, "started")
+	assert.Contains(t, out.Text, "timed out")
 
 	time.Sleep(3 * time.Second) // outlast the grandchild's sleep
 

@@ -106,23 +106,23 @@ func (t SkillTool) Schema() llm.Tool {
 	}}
 }
 
-func (t SkillTool) Execute(ctx context.Context, args map[string]any) (string, error) {
+func (t SkillTool) Execute(ctx context.Context, args map[string]any) (Result, error) {
 	name, err := requireString(args, "skill")
 	if err != nil {
-		return "", err
+		return Result{}, err
 	}
 
 	if !t.inMenu(name) {
 		// Unknown name: return the menu as guidance rather than a turn-ending
 		// error, so the model can correct itself.
-		return "unknown skill " + name + ". " + t.menuText(), nil
+		return Result{Text: "unknown skill " + name + ". " + t.menuText()}, nil
 	}
 
 	file, _ := args["file"].(string)
 	if file == "" {
 		body, rerr := os.ReadFile(filepath.Join(t.dir, name, "SKILL.md")) //nolint:gosec // name is menu-validated
 		if rerr != nil {
-			return "", fmt.Errorf("read skill %q: %w", name, rerr)
+			return Result{}, fmt.Errorf("read skill %q: %w", name, rerr)
 		}
 
 		// Engagement = loading the skill itself. Best-effort: a report failure
@@ -131,21 +131,21 @@ func (t SkillTool) Execute(ctx context.Context, args map[string]any) (string, er
 			_ = t.onEngage(ctx, name)
 		}
 
-		return string(body), nil
+		return Result{Text: string(body)}, nil
 	}
 
 	// Supporting file: jail it to the skill's own directory.
 	abs, rerr := resolveInRoot(filepath.Join(t.dir, name), file)
 	if rerr != nil {
-		return "", rerr
+		return Result{}, rerr
 	}
 
 	data, rerr := os.ReadFile(abs) //nolint:gosec // abs is resolveInRoot-jailed to the skill dir
 	if rerr != nil {
-		return "", fmt.Errorf("read skill file %q/%q: %w", name, file, rerr)
+		return Result{}, fmt.Errorf("read skill file %q/%q: %w", name, file, rerr)
 	}
 
-	return string(data), nil
+	return Result{Text: string(data)}, nil
 }
 
 func (t SkillTool) inMenu(name string) bool {

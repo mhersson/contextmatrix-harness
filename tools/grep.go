@@ -32,17 +32,17 @@ func (t GrepTool) Schema() llm.Tool {
 	}}
 }
 
-func (t GrepTool) Execute(ctx context.Context, args map[string]any) (string, error) {
+func (t GrepTool) Execute(ctx context.Context, args map[string]any) (Result, error) {
 	pattern, err := requireString(args, "pattern")
 	if err != nil {
-		return "", err
+		return Result{}, err
 	}
 
 	searchPath := t.root
 	if rel := optString(args, "path", ""); rel != "" {
 		abs, err := resolveInRoot(t.root, rel)
 		if err != nil {
-			return "", err
+			return Result{}, err
 		}
 
 		searchPath = abs
@@ -63,15 +63,15 @@ func (t GrepTool) Execute(ctx context.Context, args map[string]any) (string, err
 	if err != nil {
 		// rg exits 1 when there are no matches — not an error for us.
 		if ee, ok := err.(*exec.ExitError); ok && ee.ExitCode() == 1 {
-			return "no matches", nil
+			return Result{Text: "no matches"}, nil
 		}
 
 		if _, lookErr := exec.LookPath("rg"); lookErr != nil {
-			return "", fmt.Errorf("ripgrep (rg) not installed")
+			return Result{}, fmt.Errorf("ripgrep (rg) not installed")
 		}
 
-		return "", fmt.Errorf("rg failed: %v: %s", err, string(out))
+		return Result{}, fmt.Errorf("rg failed: %v: %s", err, string(out))
 	}
 	// Strip the workspace root prefix for cleaner, portable output.
-	return strings.ReplaceAll(string(out), t.root+"/", ""), nil
+	return Result{Text: strings.ReplaceAll(string(out), t.root+"/", "")}, nil
 }

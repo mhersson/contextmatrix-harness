@@ -33,22 +33,22 @@ func (t WriteTool) Schema() llm.Tool {
 	}}
 }
 
-func (t WriteTool) Execute(_ context.Context, args map[string]any) (string, error) {
+func (t WriteTool) Execute(_ context.Context, args map[string]any) (Result, error) {
 	rel, err := requireString(args, "path")
 	if err != nil {
-		return "", err
+		return Result{}, err
 	}
 
 	content, err := requireString(args, "content")
 	if err != nil {
-		return "", err
+		return Result{}, err
 	}
 
 	createDirs := optBool(args, "create_dirs")
 
 	abs, err := resolveInRoot(t.root, rel)
 	if err != nil {
-		return "", err
+		return Result{}, err
 	}
 
 	old, readErr := os.ReadFile(abs)
@@ -56,15 +56,15 @@ func (t WriteTool) Execute(_ context.Context, args map[string]any) (string, erro
 
 	if createDirs {
 		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
-			return "", fmt.Errorf("create parent dirs: %w", err)
+			return Result{}, fmt.Errorf("create parent dirs: %w", err)
 		}
 	}
 
 	if err := os.WriteFile(abs, []byte(content), 0o644); err != nil {
-		return "", err
+		return Result{}, err
 	}
 
-	return summarizeWrite(rel, string(old), content, existed), nil
+	return Result{Text: summarizeWrite(rel, string(old), content, existed)}, nil
 }
 
 func summarizeWrite(rel, oldContent, newContent string, existed bool) string {
