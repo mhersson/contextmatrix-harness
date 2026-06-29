@@ -795,3 +795,86 @@ func TestInboxCtxCancelDuringWait(t *testing.T) {
 	assert.Equal(t, "canceled", res.Reason)
 	assert.False(t, res.Completed)
 }
+
+// imageTool returns text plus one inline image (models an MCP get_card result).
+type imageTool struct{}
+
+func (imageTool) Name() string { return "img" }
+func (imageTool) Schema() llm.Tool {
+	return llm.Tool{Type: "function", Function: llm.ToolFunction{Name: "img"}}
+}
+
+func (imageTool) Execute(_ context.Context, _ map[string]any) (tools.Result, error) {
+	return tools.Result{Text: "card text", Images: []llm.ImageURL{{URL: "data:image/png;base64,AAAA"}}}, nil
+}
+
+func TestRunInjectsToolImagesAsUserMessage(t *testing.T) {
+	reg := tools.NewRegistry(imageTool{})
+	capt := &capturingLLMSeq{responses: []llm.Response{
+		{ToolCalls: []llm.ToolCall{toolCall("1", "img", `{}`)}},
+		{Content: "done", FinishReason: "stop"},
+	}}
+
+	_, err := Run(context.Background(), capt, reg, newEmitter(), "describe the card", Config{MaxTurns: 10})
+	require.NoError(t, err)
+
+	require.Len(t, capt.requests, 2)
+	second := capt.requests[1].Messages
+
+	text, ok := findToolResult(second, "1")
+	require.True(t, ok)
+	assert.Equal(t, "card text", text)
+
+	toolIdx := -1
+
+	for i, m := range second {
+		if m.Role == "tool" && m.ToolCallID == "1" {
+			toolIdx = i
+
+			break
+		}
+	}
+
+	require.GreaterOrEqual(t, toolIdx, 0)
+
+	uIdx := userMessageIndexAfter(second, toolIdx)
+	require.GreaterOrEqual(t, uIdx, 0, "synthetic image user message not found after tool result")
+
+	img := second[uIdx]
+	require.Len(t, img.ContentParts, 2)
+	assert.Equal(t, "text", img.ContentParts[0].Type)
+	assert.Equal(t, toolImagePreamble, img.ContentParts[0].Text)
+	assert.Equal(t, "image_url", img.ContentParts[1].Type)
+	require.NotNil(t, img.ContentParts[1].ImageURL)
+	assert.Equal(t, "data:image/png;base64,AAAA", img.ContentParts[1].ImageURL.URL)
+}
+
+func TestRunNoImageMessageWhenToolReturnsNoImages(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "f.txt"), []byte("data"), 0o644))
+	reg := tools.NewRegistry(tools.NewReadTool(root))
+
+	capt := &capturingLLMSeq{responses: []llm.Response{
+		{ToolCalls: []llm.ToolCall{toolCall("1", "read", `{"path":"f.txt"}`)}},
+		{Content: "done", FinishReason: "stop"},
+	}}
+
+	_, err := Run(context.Background(), capt, reg, newEmitter(), "task", Config{MaxTurns: 10})
+	require.NoError(t, err)
+
+	require.Len(t, capt.requests, 2)
+	second := capt.requests[1].Messages
+
+	toolIdx := -1
+
+	for i, m := range second {
+		if m.Role == "tool" && m.ToolCallID == "1" {
+			toolIdx = i
+
+			break
+		}
+	}
+
+	require.GreaterOrEqual(t, toolIdx, 0)
+	assert.Equal(t, -1, userMessageIndexAfter(second, toolIdx), "text-only tool result must not append a user message")
+}

@@ -98,6 +98,26 @@ func seedMessage(task string, images []llm.ImageURL) llm.Message {
 	return llm.Message{Role: "user", ContentParts: parts}
 }
 
+// toolImagePreamble prefixes the synthetic user message that carries images
+// surfaced by a tool result, guaranteeing a non-empty text part and giving the
+// model context.
+const toolImagePreamble = "Images returned by the preceding tool call(s):"
+
+// imageMessage builds the synthetic user message carrying tool-returned images
+// as OpenAI content parts: the preamble text followed by one image_url part per
+// image. Only called when len(images) > 0.
+func imageMessage(images []llm.ImageURL) llm.Message {
+	parts := make([]llm.ContentPart, 0, len(images)+1)
+	parts = append(parts, llm.ContentPart{Type: "text", Text: toolImagePreamble})
+
+	for i := range images {
+		img := images[i]
+		parts = append(parts, llm.ContentPart{Type: "image_url", ImageURL: &img})
+	}
+
+	return llm.Message{Role: "user", ContentParts: parts}
+}
+
 // Run drives the bare agent loop: model call → tool dispatch → repeat, until the
 // model emits no tool calls (done) or a cap trips. FSM-free; no orchestration.
 func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.Emitter, task string, cfg Config) (Result, error) {
@@ -294,6 +314,8 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 
 		var pendingMsgs []UserMessage
 
+		var turnImages []llm.ImageURL
+
 		// turnHadCapableTool is set to true by the closure below when at least
 		// one tool call in this turn produced parseable arguments (whether or not
 		// the tool itself returned an error). A parse/repair failure signals that
@@ -364,6 +386,8 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 
 				text = tools.HeadTail(text, cfg.ToolOutputMaxBytes)
 				msgs = append(msgs, toolResultMsg(tc.ID, text))
+				turnImages = append(turnImages, out.Images...) // nil-safe; images delivered after the batch
+
 				emit.Emit(events.ToolResult, map[string]any{"id": tc.ID, "output_len": len(text)})
 			}()
 
@@ -425,6 +449,16 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 					return res, nil
 				}
 			}
+		}
+
+		// Tool-role messages are text-only in the OpenAI format, so any images a
+		// tool surfaced are delivered as one synthetic user message appended after
+		// the whole tool batch (every tool_call_id is answered by its tool message
+		// first, with no user message interleaved). Image context precedes any
+		// human interjection.
+		if len(turnImages) > 0 {
+			msgs = append(msgs, imageMessage(turnImages))
+			emit.Emit(events.StateChange, map[string]any{"event": "tool_images", "count": len(turnImages)})
 		}
 
 		// All tool results (executed and skipped) precede the user messages,
