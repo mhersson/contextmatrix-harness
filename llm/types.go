@@ -1,4 +1,4 @@
-// Package llm is a raw-HTTP, OpenAI-compatible client for OpenRouter behind a
+// Package llm is a raw-HTTP, OpenAI-compatible client for OpenRouter or any OpenAI-compatible endpoint behind a
 // narrow Send/SendStream interface. No SDK: the streaming/tool-call path is
 // owned end-to-end so weak-model quirks are handled explicitly.
 package llm
@@ -81,16 +81,17 @@ type ToolFunction struct {
 
 // Request is the /chat/completions body. Provider/Models are OpenRouter extras.
 type Request struct {
-	Model           string          `json:"model,omitempty"`
-	Models          []string        `json:"models,omitempty"`
-	Messages        []Message       `json:"messages"`
-	Tools           []Tool          `json:"tools,omitempty"`
-	Stream          bool            `json:"stream,omitempty"`
-	Provider        json.RawMessage `json:"provider,omitempty"`
-	Reasoning       json.RawMessage `json:"reasoning,omitempty"`
-	Usage           *UsageOpt       `json:"usage,omitempty"`
-	ReasoningEffort string          `json:"reasoning_effort,omitempty"`
-	StreamOptions   *streamOptions  `json:"stream_options,omitempty"`
+	Model     string          `json:"model,omitempty"`
+	Models    []string        `json:"models,omitempty"`
+	Messages  []Message       `json:"messages"`
+	Tools     []Tool          `json:"tools,omitempty"`
+	Stream    bool            `json:"stream,omitempty"`
+	Provider  json.RawMessage `json:"provider,omitempty"`
+	Reasoning json.RawMessage `json:"reasoning,omitempty"`
+	Usage     *UsageOpt       `json:"usage,omitempty"`
+	// openai dialect only; set by encodeRequest, never by callers.
+	ReasoningEffort string         `json:"reasoning_effort,omitempty"`
+	StreamOptions   *streamOptions `json:"stream_options,omitempty"`
 }
 
 // UsageOpt opts into OpenRouter usage accounting (token counts + the

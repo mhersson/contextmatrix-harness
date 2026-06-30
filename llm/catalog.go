@@ -120,7 +120,8 @@ func parseCatalogOpenAI(r io.Reader) (Catalog, error) {
 	return out, nil
 }
 
-// FetchCatalog GETs the live model catalog from OpenRouter.
+// FetchCatalog GETs the live model catalog from the configured endpoint and
+// parses it according to the client's dialect (OpenRouter or OpenAI-compatible).
 func (c *Client) FetchCatalog(ctx context.Context) (Catalog, error) {
 	hr, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/models", nil)
 	if err != nil {

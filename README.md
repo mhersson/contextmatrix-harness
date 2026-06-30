@@ -16,7 +16,7 @@ This module is consumed by both backends in the ContextMatrix ecosystem:
 | Package   | Responsibility                                                              |
 | --------- | --------------------------------------------------------------------------- |
 | `events`  | typed event stream → stdout + JSON transcript                               |
-| `llm`     | raw-HTTP OpenRouter client: `Send`/`SendStream`, SSE, `models[]` failover    |
+| `llm`     | raw-HTTP OpenAI-compatible client (default OpenRouter): `Send`/`SendStream`, SSE, `models[]` failover |
 | `tools`   | jailed filesystem/shell `Tool` registry, read-only subset, Skill tool        |
 | `harness` | the loop: `Run`, `Verify`, `SpawnSubagents`, the `Inbox` seam, `Config`       |
 | `redact`  | literal-secret masking, injected into the loop via `Config.RedactToolOutput`  |

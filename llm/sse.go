@@ -48,7 +48,7 @@ type apiError struct {
 	Message string `json:"message"`
 }
 
-// parseStream reads an OpenRouter SSE body and assembles a Response. It skips
+// parseStream reads an OpenAI-compatible SSE body and assembles a Response. It skips
 // ":" keepalive comments, stops on "[DONE]", accumulates tool_calls by index
 // (the name may arrive in a later frame than id/arguments), captures usage from
 // the final frame, surfaces mid-stream error frames as an error, and rejects a
