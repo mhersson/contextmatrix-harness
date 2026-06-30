@@ -81,14 +81,16 @@ type ToolFunction struct {
 
 // Request is the /chat/completions body. Provider/Models are OpenRouter extras.
 type Request struct {
-	Model     string          `json:"model,omitempty"`
-	Models    []string        `json:"models,omitempty"`
-	Messages  []Message       `json:"messages"`
-	Tools     []Tool          `json:"tools,omitempty"`
-	Stream    bool            `json:"stream,omitempty"`
-	Provider  json.RawMessage `json:"provider,omitempty"`
-	Reasoning json.RawMessage `json:"reasoning,omitempty"`
-	Usage     *UsageOpt       `json:"usage,omitempty"`
+	Model           string          `json:"model,omitempty"`
+	Models          []string        `json:"models,omitempty"`
+	Messages        []Message       `json:"messages"`
+	Tools           []Tool          `json:"tools,omitempty"`
+	Stream          bool            `json:"stream,omitempty"`
+	Provider        json.RawMessage `json:"provider,omitempty"`
+	Reasoning       json.RawMessage `json:"reasoning,omitempty"`
+	Usage           *UsageOpt       `json:"usage,omitempty"`
+	ReasoningEffort string          `json:"reasoning_effort,omitempty"`
+	StreamOptions   *streamOptions  `json:"stream_options,omitempty"`
 }
 
 // UsageOpt opts into OpenRouter usage accounting (token counts + the

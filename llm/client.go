@@ -120,7 +120,7 @@ func (c *Client) doWithRetry(ctx context.Context, req Request) (*http.Response, 
 }
 
 func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
-	b, err := json.Marshal(req)
+	b, err := encodeRequest(req, c.dialect)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
