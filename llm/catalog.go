@@ -71,6 +71,55 @@ func ParseCatalog(r io.Reader) (Catalog, error) {
 	return out, nil
 }
 
+// parseCatalogOpenAI decodes an OpenAI-compatible /models response. Tool
+// capability is read from capabilities.features (an array containing "tools")
+// and mapped onto SupportedParameters so CatalogEntry.SupportsTools() works
+// unchanged. Endpoints that omit these fields yield zero-value entries.
+func parseCatalogOpenAI(r io.Reader) (Catalog, error) {
+	var doc struct {
+		Data []struct {
+			ID            string `json:"id"`
+			ContextLength int    `json:"context_length"`
+			Pricing       struct {
+				Prompt     string `json:"prompt"`
+				Completion string `json:"completion"`
+			} `json:"pricing"`
+			Capabilities struct {
+				Features []string `json:"features"`
+			} `json:"capabilities"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(r).Decode(&doc); err != nil {
+		return nil, fmt.Errorf("decode catalog: %w", err)
+	}
+
+	out := make(Catalog, 0, len(doc.Data))
+	for _, d := range doc.Data {
+		prompt, _ := strconv.ParseFloat(d.Pricing.Prompt, 64)
+		completion, _ := strconv.ParseFloat(d.Pricing.Completion, 64)
+
+		var params []string
+
+		for _, f := range d.Capabilities.Features {
+			if f == "tools" {
+				params = []string{"tools"}
+
+				break
+			}
+		}
+
+		out = append(out, CatalogEntry{
+			ID:                    d.ID,
+			PromptPricePerTok:     prompt,
+			CompletionPricePerTok: completion,
+			ContextLength:         d.ContextLength,
+			SupportedParameters:   params,
+		})
+	}
+
+	return out, nil
+}
+
 // FetchCatalog GETs the live model catalog from OpenRouter.
 func (c *Client) FetchCatalog(ctx context.Context) (Catalog, error) {
 	hr, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/models", nil)
@@ -90,6 +139,10 @@ func (c *Client) FetchCatalog(ctx context.Context) (Catalog, error) {
 		body, _ := io.ReadAll(resp.Body)
 
 		return nil, fmt.Errorf("catalog status %d: %s", resp.StatusCode, string(body))
+	}
+
+	if c.dialect == DialectOpenAI {
+		return parseCatalogOpenAI(resp.Body)
 	}
 
 	return ParseCatalog(resp.Body)

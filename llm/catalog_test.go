@@ -27,3 +27,29 @@ func TestParseCatalog(t *testing.T) {
 	require.True(t, ok)
 	assert.False(t, nt.SupportsTools())
 }
+
+func TestParseCatalogOpenAI(t *testing.T) {
+	body := `{"data":[
+		{"id":"model-a","context_length":200000,
+		 "pricing":{"prompt":"0.000003","completion":"0.000015"},
+		 "capabilities":{"features":["streaming","tools","json_mode"]}},
+		{"id":"model-b","context_length":128000,
+		 "pricing":{"prompt":"0.0000007","completion":"0.000003"},
+		 "capabilities":{"features":["streaming"]}}
+	]}`
+
+	cat, err := parseCatalogOpenAI(strings.NewReader(body))
+	require.NoError(t, err)
+	require.Len(t, cat, 2)
+
+	a, ok := cat.Find("model-a")
+	require.True(t, ok)
+	assert.True(t, a.SupportsTools())
+	assert.Equal(t, 200000, a.ContextLength)
+	assert.InDelta(t, 0.000003, a.PromptPricePerTok, 1e-12)
+	assert.InDelta(t, 0.000015, a.CompletionPricePerTok, 1e-12)
+
+	b, ok := cat.Find("model-b")
+	require.True(t, ok)
+	assert.False(t, b.SupportsTools())
+}
