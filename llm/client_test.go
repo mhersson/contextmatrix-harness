@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -51,6 +52,37 @@ func TestClientSendNonStream(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "done", resp.Content)
 	assert.Equal(t, "stop", resp.FinishReason)
+}
+
+func TestClientSendStreamOpenAIDialect(t *testing.T) {
+	var gotBody []byte
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\ndata: [DONE]\n") //nolint:errcheck
+	}))
+	defer srv.Close()
+
+	c := NewClient("k", WithBaseURL(srv.URL), WithDialect(DialectOpenAI))
+	_, err := c.SendStream(context.Background(), Request{
+		Model:     "m",
+		Provider:  json.RawMessage(`{"sort":"price"}`),
+		Models:    []string{"a", "b"},
+		Messages:  []Message{{Role: "user", Content: "hi"}},
+		Reasoning: json.RawMessage(`{"effort":"high"}`),
+	}, nil)
+	require.NoError(t, err)
+
+	m := keys(t, gotBody)
+	for _, k := range []string{"provider", "models", "usage"} {
+		_, ok := m[k]
+		assert.False(t, ok, "openai dialect must omit %q from the wire", k)
+	}
+
+	assert.JSONEq(t, `"high"`, string(m["reasoning_effort"]), "reasoning_effort must be wired through")
+	assert.JSONEq(t, `{"include_usage":true}`, string(m["stream_options"]), "stream_options must be present for streamed openai calls")
 }
 
 func TestClientNon200(t *testing.T) {
