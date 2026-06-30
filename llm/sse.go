@@ -94,7 +94,7 @@ func parseStreamWithLimit(r io.Reader, onDelta func(Delta), maxLine int) (Respon
 		}
 
 		if chunk.Error != nil {
-			return resp, fmt.Errorf("openrouter stream error: %s", chunk.Error.Message)
+			return resp, fmt.Errorf("llm endpoint stream error: %s", chunk.Error.Message)
 		}
 
 		if chunk.Model != "" {

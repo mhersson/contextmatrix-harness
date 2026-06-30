@@ -51,7 +51,7 @@ func (c *Client) SendStream(ctx context.Context, req Request, onDelta func(Delta
 	if hr.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(hr.Body)
 
-		return Response{}, fmt.Errorf("openrouter status %d: %s", hr.StatusCode, string(body))
+		return Response{}, fmt.Errorf("llm endpoint status %d: %s", hr.StatusCode, string(body))
 	}
 
 	return parseStream(hr.Body, onDelta)
@@ -69,7 +69,7 @@ func (c *Client) Send(ctx context.Context, req Request) (Response, error) {
 
 	body, _ := io.ReadAll(hr.Body)
 	if hr.StatusCode != http.StatusOK {
-		return Response{}, fmt.Errorf("openrouter status %d: %s", hr.StatusCode, string(body))
+		return Response{}, fmt.Errorf("llm endpoint status %d: %s", hr.StatusCode, string(body))
 	}
 
 	var nr nonStreamResponse
