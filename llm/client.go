@@ -16,6 +16,7 @@ type Client struct {
 	http    *http.Client
 	baseURL string
 	apiKey  string
+	dialect Dialect
 	retry   RetryPolicy
 	sleep   func(context.Context, time.Duration) error
 }
@@ -23,6 +24,7 @@ type Client struct {
 type Option func(*Client)
 
 func WithBaseURL(u string) Option          { return func(c *Client) { c.baseURL = u } }
+func WithDialect(d Dialect) Option         { return func(c *Client) { c.dialect = d } }
 func WithHTTPClient(h *http.Client) Option { return func(c *Client) { c.http = h } }
 
 func NewClient(apiKey string, opts ...Option) *Client {
