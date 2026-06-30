@@ -16,6 +16,7 @@ type Client struct {
 	http    *http.Client
 	baseURL string
 	apiKey  string
+	dialect Dialect
 	retry   RetryPolicy
 	sleep   func(context.Context, time.Duration) error
 }
@@ -23,6 +24,7 @@ type Client struct {
 type Option func(*Client)
 
 func WithBaseURL(u string) Option          { return func(c *Client) { c.baseURL = u } }
+func WithDialect(d Dialect) Option         { return func(c *Client) { c.dialect = d } }
 func WithHTTPClient(h *http.Client) Option { return func(c *Client) { c.http = h } }
 
 func NewClient(apiKey string, opts ...Option) *Client {
@@ -49,7 +51,7 @@ func (c *Client) SendStream(ctx context.Context, req Request, onDelta func(Delta
 	if hr.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(hr.Body)
 
-		return Response{}, fmt.Errorf("openrouter status %d: %s", hr.StatusCode, string(body))
+		return Response{}, fmt.Errorf("llm endpoint status %d: %s", hr.StatusCode, string(body))
 	}
 
 	return parseStream(hr.Body, onDelta)
@@ -67,7 +69,7 @@ func (c *Client) Send(ctx context.Context, req Request) (Response, error) {
 
 	body, _ := io.ReadAll(hr.Body)
 	if hr.StatusCode != http.StatusOK {
-		return Response{}, fmt.Errorf("openrouter status %d: %s", hr.StatusCode, string(body))
+		return Response{}, fmt.Errorf("llm endpoint status %d: %s", hr.StatusCode, string(body))
 	}
 
 	var nr nonStreamResponse
@@ -118,7 +120,7 @@ func (c *Client) doWithRetry(ctx context.Context, req Request) (*http.Response, 
 }
 
 func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
-	b, err := json.Marshal(req)
+	b, err := encodeRequest(req, c.dialect)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}

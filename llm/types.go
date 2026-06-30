@@ -1,4 +1,4 @@
-// Package llm is a raw-HTTP, OpenAI-compatible client for OpenRouter behind a
+// Package llm is a raw-HTTP, OpenAI-compatible client for OpenRouter or any OpenAI-compatible endpoint behind a
 // narrow Send/SendStream interface. No SDK: the streaming/tool-call path is
 // owned end-to-end so weak-model quirks are handled explicitly.
 package llm
@@ -89,6 +89,9 @@ type Request struct {
 	Provider  json.RawMessage `json:"provider,omitempty"`
 	Reasoning json.RawMessage `json:"reasoning,omitempty"`
 	Usage     *UsageOpt       `json:"usage,omitempty"`
+	// openai dialect only; set by encodeRequest, never by callers.
+	ReasoningEffort string         `json:"reasoning_effort,omitempty"`
+	StreamOptions   *streamOptions `json:"stream_options,omitempty"`
 }
 
 // UsageOpt opts into OpenRouter usage accounting (token counts + the
