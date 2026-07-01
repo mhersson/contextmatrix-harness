@@ -273,7 +273,14 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 				}
 			}
 
-			if resp.Usage.PromptTokens >= int(contextLimitThreshold*float64(cfg.ContextWindow)) {
+			hardStop := int(contextLimitThreshold * float64(cfg.ContextWindow))
+			if cfg.Compaction != nil {
+				if eff := effectiveCompactionThreshold(cfg.ContextWindow, cfg.Compaction.Threshold); eff > hardStop {
+					hardStop = eff
+				}
+			}
+
+			if resp.Usage.PromptTokens >= hardStop {
 				res.Reason = "context_limit"
 
 				emit.Emit(events.ContextLimit, map[string]any{

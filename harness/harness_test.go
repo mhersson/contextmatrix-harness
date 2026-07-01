@@ -281,6 +281,23 @@ func TestRun_CompactionCostIsCounted(t *testing.T) {
 	assert.EqualValues(t, 20, res.CompletionTokens)
 }
 
+func TestRun_CompactionThresholdAbove85DoesNotHardStopEarly(t *testing.T) {
+	reg := tools.NewRegistry(tools.NewReadTool(t.TempDir()))
+	f := &fakeLLM{responses: []llm.Response{
+		{Content: "ok", FinishReason: "stop", Usage: llm.Usage{PromptTokens: 175000}},
+	}}
+	// window 200000, Threshold 0.95 → effective compaction 190000; old hard stop 170000.
+	// 175000 is in the dead band: must NOT hard-stop.
+	res, err := Run(context.Background(), f, reg, newEmitter(), "task", Config{
+		MaxTurns:      10,
+		ContextWindow: 200000,
+		Compaction:    &Compaction{Threshold: 0.95, KeepRecentTurns: 2},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "done", res.Reason)
+	assert.True(t, res.Completed)
+}
+
 // bigTool is a fake tool that returns a large string with distinct head/tail content.
 type bigTool struct{ output string }
 
