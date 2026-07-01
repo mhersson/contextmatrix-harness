@@ -8,8 +8,8 @@ This module is consumed by both backends in the ContextMatrix ecosystem:
 
 - **contextmatrix-agent** wraps it with a task FSM (`orchestrator`/`worker`) to
   execute board cards.
-- **contextmatrix-chat** (planned) wraps it with an interactive driver to power
-  chat sessions.
+- **contextmatrix-chat** wraps it with an interactive driver using the Inbox,
+  compaction, and seeded-history surfaces to power chat sessions.
 
 ## Packages
 
