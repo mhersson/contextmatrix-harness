@@ -77,7 +77,7 @@ func (t GlobTool) list(ctx context.Context, pattern, searchPath string) ([]strin
 // globViaFd uses fd's native glob + .gitignore handling. fd exits 0 even when
 // nothing matches, so any non-zero exit is a real error (not "no matches").
 func (t GlobTool) globViaFd(ctx context.Context, bin, pattern, searchPath string) ([]string, error) {
-	cmd := exec.CommandContext(ctx, bin, "--glob", "--type", "f", pattern, searchPath)
+	cmd := exec.CommandContext(ctx, bin, "--glob", "--type", "f", "--", pattern, searchPath)
 	cmd.Dir = t.root
 	cmd.Env = ScrubbedEnv(nil)
 
