@@ -455,6 +455,18 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 					if cfg.Interactive {
 						unproductive = 0
 
+						// A human interjection drained mid-batch is the recovery input —
+						// deliver it instead of blocking awaitNext for a brand-new message
+						// (which would lose it).
+						if len(pendingMsgs) > 0 {
+							for _, um := range pendingMsgs {
+								emit.Emit(events.UserInput, map[string]any{"message_id": um.MessageID, "content_len": len(um.Content)})
+								msgs = append(msgs, llm.Message{Role: "user", Content: um.Content})
+							}
+
+							continue
+						}
+
 						var outcome string
 
 						msgs, outcome, err = awaitNext(ctx, cfg, msgs, emit, res.Turns)

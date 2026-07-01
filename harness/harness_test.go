@@ -793,6 +793,88 @@ func TestRunDetectsIncapability(t *testing.T) {
 	assert.Less(t, res.Turns, 20, "incapable must fire before MaxTurns")
 }
 
+// pushOnStreamLLM pushes a human message into the inbox during the turn's stream
+// (after the top-of-turn drain), modelling an interjection that arrives while the
+// model is producing an all-unparseable, multi-tool-call turn.
+type pushOnStreamLLM struct {
+	inbox      *scriptedInbox
+	msg        UserMessage
+	pushOnTurn int
+	responses  []llm.Response
+	requests   []llm.Request
+	i          int
+}
+
+func (f *pushOnStreamLLM) Send(context.Context, llm.Request) (llm.Response, error) {
+	return llm.Response{FinishReason: "stop"}, nil
+}
+
+func (f *pushOnStreamLLM) SendStream(_ context.Context, req llm.Request, _ func(llm.Delta)) (llm.Response, error) {
+	f.requests = append(f.requests, req)
+	f.i++
+	if f.i == f.pushOnTurn {
+		f.inbox.push(f.msg)
+	}
+	if f.i-1 < len(f.responses) {
+		return f.responses[f.i-1], nil
+	}
+	return llm.Response{FinishReason: "stop"}, nil
+}
+
+func TestIncapableRecoveryDeliversStashedInterjection(t *testing.T) {
+	inbox := &scriptedInbox{closeErr: ErrInboxClosed} // Wait returns "done" if reached
+	fake := &pushOnStreamLLM{
+		inbox:      inbox,
+		msg:        UserMessage{MessageID: "interject-1", Content: "steer here"},
+		pushOnTurn: 1,
+		responses: []llm.Response{
+			{ToolCalls: []llm.ToolCall{ // two calls, both unparseable → turnHadCapableTool=false
+				toolCall("t1", "read", "{bad"),
+				toolCall("t2", "read", "{also-bad"),
+			}},
+			{Content: "done", FinishReason: "stop"}, // turn 2 after recovery
+		},
+	}
+	reg := tools.NewRegistry(tools.NewReadTool(t.TempDir()))
+
+	var transcript bytes.Buffer
+	emit := events.NewEmitter(nil, &transcript)
+
+	res, err := Run(context.Background(), fake, reg, emit, "task", Config{
+		Interactive:        true,
+		Inbox:              inbox,
+		IncapableThreshold: 1,
+	})
+	require.NoError(t, err)
+
+	delivered := false
+	for _, ev := range parseEvents(t, transcript.String()) {
+		if ev.Kind == events.UserInput && ev.Data["message_id"] == "interject-1" {
+			delivered = true
+		}
+	}
+
+	assert.True(t, delivered, "stashed interjection must be delivered, not dropped")
+	assert.Equal(t, "done", res.Reason)
+
+	// Turn 1 is the all-unparseable-tools turn (the interjection arrives mid-stream
+	// and is stashed, not sent yet); turn 2 is the recovery turn, which must carry
+	// the stashed interjection in its request history.
+	require.Len(t, fake.requests, 2, "expected one request for the unparseable turn and one for the recovery turn")
+
+	recoveryReq := fake.requests[1]
+
+	appended := false
+
+	for _, m := range recoveryReq.Messages {
+		if m.Role == "user" && m.Content == "steer here" {
+			appended = true
+		}
+	}
+
+	assert.True(t, appended, "recovery turn's request must include the stashed interjection as a user message")
+}
+
 func TestRun_SeedsHistoryBeforeTask(t *testing.T) {
 	reg := tools.NewRegistry(tools.NewReadTool(t.TempDir()))
 	capt := &capturingLLM{}
