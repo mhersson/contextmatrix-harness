@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"strings"
 
 	"github.com/mhersson/contextmatrix-harness/llm"
 )
@@ -46,7 +47,12 @@ func (t GitTool) Execute(ctx context.Context, args map[string]any) (Result, erro
 		return Result{}, fmt.Errorf("git subcommand %q is not allowed (read-only: status, diff, log, show, branch)", sub)
 	}
 
-	cmdArgs := append([]string{sub}, optStringSlice(args, "args")...)
+	extra := optStringSlice(args, "args")
+	if err := validateGitArgs(sub, extra); err != nil {
+		return Result{}, err
+	}
+
+	cmdArgs := append([]string{sub}, extra...)
 	cmd := exec.CommandContext(ctx, "git", cmdArgs...)
 	cmd.Dir = t.root
 	cmd.Env = ScrubbedEnv(nil)
@@ -61,4 +67,44 @@ func (t GitTool) Execute(ctx context.Context, args map[string]any) (Result, erro
 	}
 
 	return Result{Text: string(out)}, nil
+}
+
+// validateGitArgs rejects write/mutation primitives so the read-only git tool
+// cannot escape the workspace (--output) or change refs (branch create/delete/
+// rename). Keeps the "read-only is structural" contract SpawnSubagents relies on.
+func validateGitArgs(sub string, args []string) error {
+	for _, a := range args {
+		if a == "-o" || a == "--output" || a == "--output-directory" ||
+			strings.HasPrefix(a, "--output=") || strings.HasPrefix(a, "--output-directory=") {
+			return fmt.Errorf("git arg %q writes to a file and is not allowed (read-only)", a)
+		}
+	}
+
+	if sub == "branch" {
+		listMode := false
+
+		for _, a := range args {
+			if a == "--list" || a == "-l" {
+				listMode = true
+			}
+		}
+
+		for _, a := range args {
+			if strings.HasPrefix(a, "--set-upstream-to=") || strings.HasPrefix(a, "-u") {
+				return fmt.Errorf("git branch %q mutates refs and is not allowed (read-only)", a)
+			}
+
+			switch a {
+			case "-d", "-D", "--delete", "-m", "-M", "--move", "-c", "-C", "--copy",
+				"-f", "--force", "--set-upstream-to", "--unset-upstream", "--edit-description":
+				return fmt.Errorf("git branch %q mutates refs and is not allowed (read-only)", a)
+			}
+
+			if !strings.HasPrefix(a, "-") && !listMode {
+				return fmt.Errorf("git branch %q creates a branch and is not allowed (read-only)", a)
+			}
+		}
+	}
+
+	return nil
 }
