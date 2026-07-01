@@ -99,6 +99,23 @@ func TestClientNon200(t *testing.T) {
 	assert.Contains(t, err.Error(), "rate limited")
 }
 
+// TestSendStreamCapsOversizeErrorBody verifies that SendStream returns a "too
+// large" error when a non-200 error response body exceeds maxResponseBody.
+func TestSendStreamCapsOversizeErrorBody(t *testing.T) {
+	oversized := make([]byte, maxResponseBody+1)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		w.Write(oversized) //nolint:errcheck
+	}))
+	defer srv.Close()
+
+	c := NewClient("k", WithBaseURL(srv.URL))
+	_, err := c.SendStream(context.Background(), Request{Messages: []Message{{Role: "user"}}}, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exceeds")
+}
+
 // TestSendCapsOversizeBody verifies that Send returns a "too large" error when a
 // server returns a body that exceeds maxResponseBody. Approach (b) was chosen
 // (explicit error, directly assertable) over silent truncation.
