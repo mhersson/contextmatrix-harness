@@ -52,7 +52,22 @@ func compact(ctx context.Context, client llm.LLM, cfg Config, msgs []llm.Message
 		return nil, fmt.Errorf("compaction: not enough messages to summarize (total=%d sysCount=%d keepRecent=%d)", len(msgs), sysCount, keepRecent)
 	}
 
-	older := msgs[sysCount : len(msgs)-keepRecent]
+	// Compute the split boundary, then snap it so a tool-call / tool-result
+	// group is never divided across the two slices.
+	b := len(msgs) - keepRecent
+	// Step 1: if b lands inside a run of "tool" results, walk back to the
+	// assistant that issued them so all results stay in the kept slice.
+	for b > sysCount && b < len(msgs) && msgs[b].Role == "tool" {
+		b--
+	}
+	// Step 2: if older would still end with an assistant that has unanswered
+	// tool_calls, pull that assistant into kept-recent so the summarizer never
+	// receives a dangling call.
+	if b > sysCount && msgs[b-1].Role == "assistant" && len(msgs[b-1].ToolCalls) > 0 {
+		b--
+	}
+
+	older := msgs[sysCount:b]
 
 	req := llm.Request{
 		Model:    cfg.Model,
@@ -68,10 +83,10 @@ func compact(ctx context.Context, client llm.LLM, cfg Config, msgs []llm.Message
 		return nil, fmt.Errorf("compaction summarize: %w", err)
 	}
 
-	out := make([]llm.Message, 0, sysCount+1+keepRecent)
+	out := make([]llm.Message, 0, sysCount+1+len(msgs)-b)
 	out = append(out, msgs[:sysCount]...)
 	out = append(out, llm.Message{Role: "system", Content: "[Earlier conversation, summarized]\n" + resp.Content})
-	out = append(out, msgs[len(msgs)-keepRecent:]...)
+	out = append(out, msgs[b:]...)
 
 	emit.Emit(events.StateChange, map[string]any{
 		"event":       "compaction",

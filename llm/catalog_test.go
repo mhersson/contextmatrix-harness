@@ -1,6 +1,9 @@
 package llm
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -52,4 +55,21 @@ func TestParseCatalogOpenAI(t *testing.T) {
 	b, ok := cat.Find("model-b")
 	require.True(t, ok)
 	assert.False(t, b.SupportsTools())
+}
+
+// TestFetchCatalogCapsOversizeErrorBody verifies that FetchCatalog returns a
+// "too large" error when a non-200 error response body exceeds maxResponseBody.
+func TestFetchCatalogCapsOversizeErrorBody(t *testing.T) {
+	oversized := make([]byte, maxResponseBody+1)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		w.Write(oversized) //nolint:errcheck
+	}))
+	defer srv.Close()
+
+	c := NewClient("k", WithBaseURL(srv.URL))
+	_, err := c.FetchCatalog(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exceeds")
 }

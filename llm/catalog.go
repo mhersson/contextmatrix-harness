@@ -137,7 +137,10 @@ func (c *Client) FetchCatalog(ctx context.Context) (Catalog, error) {
 	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody+1))
+		if len(body) > maxResponseBody {
+			return nil, fmt.Errorf("response body exceeds %d bytes", maxResponseBody)
+		}
 
 		return nil, fmt.Errorf("catalog status %d: %s", resp.StatusCode, string(body))
 	}

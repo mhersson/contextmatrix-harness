@@ -12,6 +12,11 @@ import (
 
 const defaultBaseURL = "https://openrouter.ai/api/v1"
 
+// maxResponseBody caps non-stream and error response bodies. 8 MiB is ample
+// for any JSON payload or error page; an unbounded read is a memory-exhaustion
+// vector from a misconfigured or hostile OpenAI-compatible endpoint.
+const maxResponseBody = 8 << 20
+
 type Client struct {
 	http    *http.Client
 	baseURL string
@@ -49,7 +54,10 @@ func (c *Client) SendStream(ctx context.Context, req Request, onDelta func(Delta
 	defer hr.Body.Close() //nolint:errcheck
 
 	if hr.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(hr.Body)
+		body, _ := io.ReadAll(io.LimitReader(hr.Body, maxResponseBody+1))
+		if len(body) > maxResponseBody {
+			return Response{}, fmt.Errorf("response body exceeds %d bytes", maxResponseBody)
+		}
 
 		return Response{}, fmt.Errorf("llm endpoint status %d: %s", hr.StatusCode, string(body))
 	}
@@ -67,7 +75,11 @@ func (c *Client) Send(ctx context.Context, req Request) (Response, error) {
 	}
 	defer hr.Body.Close() //nolint:errcheck
 
-	body, _ := io.ReadAll(hr.Body)
+	body, _ := io.ReadAll(io.LimitReader(hr.Body, maxResponseBody+1))
+	if len(body) > maxResponseBody {
+		return Response{}, fmt.Errorf("response body exceeds %d bytes", maxResponseBody)
+	}
+
 	if hr.StatusCode != http.StatusOK {
 		return Response{}, fmt.Errorf("llm endpoint status %d: %s", hr.StatusCode, string(body))
 	}
