@@ -57,16 +57,16 @@ func (t GitTool) Execute(ctx context.Context, args map[string]any) (Result, erro
 	cmd.Dir = t.root
 	cmd.Env = ScrubbedEnv(nil)
 
-	out, err := cmd.CombinedOutput()
+	out, err := runCombinedCapped(cmd)
 	if err != nil {
 		if _, ok := err.(*exec.ExitError); ok {
-			return Result{Text: string(out)}, nil // surface git's own message as output, not a hard failure
+			return Result{Text: out}, nil // surface git's own message as output, not a hard failure
 		}
 
 		return Result{}, fmt.Errorf("git failed: %v", err)
 	}
 
-	return Result{Text: string(out)}, nil
+	return Result{Text: out}, nil
 }
 
 // validateGitArgs rejects write/mutation primitives so the read-only git tool

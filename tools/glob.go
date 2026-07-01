@@ -81,12 +81,12 @@ func (t GlobTool) globViaFd(ctx context.Context, bin, pattern, searchPath string
 	cmd.Dir = t.root
 	cmd.Env = ScrubbedEnv(nil)
 
-	out, err := cmd.CombinedOutput()
+	out, err := runCombinedCapped(cmd)
 	if err != nil {
-		return nil, fmt.Errorf("fd glob failed: %v: %s", err, strings.TrimSpace(string(out)))
+		return nil, fmt.Errorf("fd glob failed: %v: %s", err, strings.TrimSpace(out))
 	}
 
-	return relLines(string(out), t.root), nil
+	return relLines(out, t.root), nil
 }
 
 // globViaRg lists files with `rg --files` (which honors .gitignore — unlike
@@ -97,16 +97,16 @@ func (t GlobTool) globViaRg(ctx context.Context, pattern, searchPath string) ([]
 	cmd.Dir = t.root
 	cmd.Env = ScrubbedEnv(nil)
 
-	out, err := cmd.CombinedOutput()
+	out, err := runCombinedCapped(cmd)
 	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok && ee.ExitCode() == 1 {
 			return nil, nil // rg: no files found
 		}
 
-		return nil, fmt.Errorf("rg --files failed: %v: %s", err, strings.TrimSpace(string(out)))
+		return nil, fmt.Errorf("rg --files failed: %v: %s", err, strings.TrimSpace(out))
 	}
 
-	return filterByGlob(relLines(string(out), t.root), pattern), nil
+	return filterByGlob(relLines(out, t.root), pattern), nil
 }
 
 // filterByGlob keeps the entries matching pattern, mirroring fd's default glob

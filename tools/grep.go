@@ -59,7 +59,7 @@ func (t GrepTool) Execute(ctx context.Context, args map[string]any) (Result, err
 	cmd.Dir = t.root
 	cmd.Env = ScrubbedEnv(nil)
 
-	out, err := cmd.CombinedOutput()
+	out, err := runCombinedCapped(cmd)
 	if err != nil {
 		// rg exits 1 when there are no matches — not an error for us.
 		if ee, ok := err.(*exec.ExitError); ok && ee.ExitCode() == 1 {
@@ -70,8 +70,8 @@ func (t GrepTool) Execute(ctx context.Context, args map[string]any) (Result, err
 			return Result{}, fmt.Errorf("ripgrep (rg) not installed")
 		}
 
-		return Result{}, fmt.Errorf("rg failed: %v: %s", err, string(out))
+		return Result{}, fmt.Errorf("rg failed: %v: %s", err, out)
 	}
 	// Strip the workspace root prefix for cleaner, portable output.
-	return Result{Text: strings.ReplaceAll(string(out), t.root+"/", "")}, nil
+	return Result{Text: strings.ReplaceAll(out, t.root+"/", "")}, nil
 }
