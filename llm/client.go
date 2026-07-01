@@ -152,8 +152,12 @@ type nonStreamResponse struct {
 	Model   string `json:"model"`
 	Usage   Usage  `json:"usage"`
 	Choices []struct {
-		FinishReason string  `json:"finish_reason"`
-		Message      Message `json:"message"`
+		FinishReason string `json:"finish_reason"`
+		Message      struct {
+			Message
+			Reasoning        string `json:"reasoning"`
+			ReasoningContent string `json:"reasoning_content"`
+		} `json:"message"`
 	} `json:"choices"`
 }
 
@@ -163,6 +167,10 @@ func (n nonStreamResponse) toResponse() Response {
 		r.Content = n.Choices[0].Message.Content
 		r.ToolCalls = n.Choices[0].Message.ToolCalls
 		r.FinishReason = n.Choices[0].FinishReason
+		r.Reasoning = n.Choices[0].Message.Reasoning
+		if r.Reasoning == "" {
+			r.Reasoning = n.Choices[0].Message.ReasoningContent
+		}
 	}
 
 	return r
