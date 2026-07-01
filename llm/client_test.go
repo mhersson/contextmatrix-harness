@@ -54,6 +54,20 @@ func TestClientSendNonStream(t *testing.T) {
 	assert.Equal(t, "stop", resp.FinishReason)
 }
 
+func TestSendCapturesReasoning(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"model":"m","choices":[{"finish_reason":"stop",`+
+			`"message":{"role":"assistant","content":"hi","reasoning":"because"}}]}`)
+	}))
+	defer srv.Close()
+
+	c := NewClient("k", WithBaseURL(srv.URL))
+	resp, err := c.Send(context.Background(), Request{Model: "m", Messages: []Message{{Role: "user", Content: "q"}}})
+	require.NoError(t, err)
+	assert.Equal(t, "because", resp.Reasoning)
+	assert.Equal(t, "hi", resp.Content)
+}
+
 func TestClientSendStreamOpenAIDialect(t *testing.T) {
 	var gotBody []byte
 

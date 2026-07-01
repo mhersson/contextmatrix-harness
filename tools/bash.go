@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -82,10 +81,10 @@ func (t BashTool) Execute(ctx context.Context, args map[string]any) (Result, err
 	// group leader: pgid == child pid). Plain ctx-cancel leaves grandchildren.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
-	var buf bytes.Buffer
+	cw := &capWriter{limit: subprocessOutputCap}
 
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
+	cmd.Stdout = cw
+	cmd.Stderr = cw
 
 	if err := cmd.Start(); err != nil {
 		return Result{}, fmt.Errorf("start command: %w", err)
@@ -106,15 +105,15 @@ func (t BashTool) Execute(ctx context.Context, args map[string]any) (Result, err
 
 		<-done
 
-		return Result{Text: buf.String() + fmt.Sprintf("\n[command timed out after %ds]", timeout)}, nil
+		return Result{Text: cw.String() + fmt.Sprintf("\n[command timed out after %ds]", timeout)}, nil
 	case <-ctx.Done():
 		_ = syscall.Kill(-pgid, syscall.SIGKILL) //nolint:errcheck
 
 		<-done
 
-		return Result{Text: buf.String()}, ctx.Err()
+		return Result{Text: cw.String()}, ctx.Err()
 	case werr := <-done:
-		res := buf.String()
+		res := cw.String()
 		if werr != nil {
 			res += fmt.Sprintf("\n[command exited with error: %v]", werr)
 		}

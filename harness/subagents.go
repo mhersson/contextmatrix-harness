@@ -2,6 +2,7 @@ package harness
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 
@@ -37,6 +38,8 @@ type SubagentOpts struct {
 	ToolOutputMaxBytes int                 // 0 disables the child tool-result size cap
 	RedactToolOutput   func(string) string // nil = identity; scrubs child tool output
 	ExtraReadOnlyTools []tools.Tool        // appended to the child read-only registry (e.g. the Skill tool)
+	Provider           json.RawMessage     // OpenRouter provider routing inherited by children; nil = default selection
+	Reasoning          json.RawMessage     // reasoning config inherited by children; nil = none
 }
 
 // SpawnSubagents runs specs as parallel, READ-ONLY child Harness.Run calls over
@@ -84,6 +87,8 @@ func SpawnSubagents(ctx context.Context, client llm.LLM, root string, emit *even
 			res, err := Run(ctx, client, reg, emit, spec.Prompt,
 				Config{
 					Model:              model,
+					Provider:           opts.Provider,
+					Reasoning:          opts.Reasoning,
 					MaxTurns:           spec.MaxTurns,
 					MaxCostUSD:         cost,
 					ContextWindow:      spec.ContextWindow,

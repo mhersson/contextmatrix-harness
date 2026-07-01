@@ -118,6 +118,19 @@ func imageMessage(images []llm.ImageURL) llm.Message {
 	return llm.Message{Role: "user", ContentParts: parts}
 }
 
+// redactStr applies cfg.RedactToolOutput to s when configured, otherwise
+// returns s unchanged. Used to scrub raw model content/reasoning/tool-call
+// arguments before they reach the event stream and JSON transcript — the
+// conversation history (msgs) is never passed through this, so the model
+// still executes with the real, unredacted content.
+func redactStr(cfg Config, s string) string {
+	if cfg.RedactToolOutput != nil {
+		return cfg.RedactToolOutput(s)
+	}
+
+	return s
+}
+
 // Run drives the bare agent loop: model call → tool dispatch → repeat, until the
 // model emits no tool calls (done) or a cap trips. FSM-free; no orchestration.
 func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.Emitter, task string, cfg Config) (Result, error) {
@@ -214,13 +227,13 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 		res.Output = resp.Content
 
 		if resp.Reasoning != "" {
-			emit.Emit(events.Thinking, map[string]any{"turn": res.Turns, "content": resp.Reasoning})
+			emit.Emit(events.Thinking, map[string]any{"turn": res.Turns, "content": redactStr(cfg, resp.Reasoning)})
 		}
 
 		emit.Emit(events.ModelResponse, map[string]any{
 			"turn": res.Turns, "finish_reason": resp.FinishReason,
 			"tool_calls": len(resp.ToolCalls), "content_len": len(resp.Content),
-			"content": resp.Content, "model": cfg.Model,
+			"content": redactStr(cfg, resp.Content), "model": cfg.Model,
 		})
 		emit.Emit(events.UsageKind, map[string]any{
 			"prompt_tokens": resp.Usage.PromptTokens, "completion_tokens": resp.Usage.CompletionTokens,
@@ -230,8 +243,21 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 		if cfg.ContextWindow > 0 {
 			if cfg.Compaction != nil {
 				if resp.Usage.PromptTokens >= effectiveCompactionThreshold(cfg.ContextWindow, cfg.Compaction.Threshold) {
-					newMsgs, cerr := compact(ctx, client, cfg, msgs, cfg.Compaction.KeepRecentTurns, emit)
+					newMsgs, cUsage, cerr := compact(ctx, client, cfg, msgs, cfg.Compaction.KeepRecentTurns, emit)
 					if cerr == nil {
+						// The summarize call is real and billable regardless of whether it
+						// shrank the history, so it is counted against the budget here,
+						// before the shrink/no-progress branch below.
+						res.TotalCostUSD += cUsage.Cost
+						res.PromptTokens += int64(cUsage.PromptTokens)
+						res.CompletionTokens += int64(cUsage.CompletionTokens)
+						emit.Emit(events.UsageKind, map[string]any{
+							"prompt_tokens": cUsage.PromptTokens, "completion_tokens": cUsage.CompletionTokens,
+							"cost_usd": cUsage.Cost, "model": cfg.Model, "phase": "compaction",
+						})
+					}
+
+					if cerr == nil && len(newMsgs) < len(msgs) {
 						// Discard the triggering turn's response (its tool calls never
 						// execute) and still count the turn — a transcript consumer may
 						// see a model_response/thinking for an abandoned turn followed
@@ -241,16 +267,33 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 						continue
 					}
 
-					// Compaction failed (e.g. nothing left to summarize): emit a
-					// warning and fall through to the hard-stop check below.
-					emit.Emit(events.StateChange, map[string]any{
-						"event": "compaction_failed",
-						"error": cerr.Error(),
-					})
+					if cerr == nil {
+						// Compaction produced no forward progress (snapped tail already
+						// dominates the window). Fall through to the hard stop instead of
+						// re-compacting forever.
+						emit.Emit(events.StateChange, map[string]any{
+							"event": "compaction_failed",
+							"error": "no forward progress",
+						})
+					} else {
+						// Compaction failed (e.g. nothing left to summarize): emit a
+						// warning and fall through to the hard-stop check below.
+						emit.Emit(events.StateChange, map[string]any{
+							"event": "compaction_failed",
+							"error": cerr.Error(),
+						})
+					}
 				}
 			}
 
-			if resp.Usage.PromptTokens >= int(contextLimitThreshold*float64(cfg.ContextWindow)) {
+			hardStop := int(contextLimitThreshold * float64(cfg.ContextWindow))
+			if cfg.Compaction != nil {
+				if eff := effectiveCompactionThreshold(cfg.ContextWindow, cfg.Compaction.Threshold); eff > hardStop {
+					hardStop = eff
+				}
+			}
+
+			if resp.Usage.PromptTokens >= hardStop {
 				res.Reason = "context_limit"
 
 				emit.Emit(events.ContextLimit, map[string]any{
@@ -336,7 +379,7 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 			func() {
 				res.ToolCallCount++
 
-				emit.Emit(events.ToolCallKind, map[string]any{"id": tc.ID, "name": tc.Function.Name, "raw_args": tc.Function.Arguments})
+				emit.Emit(events.ToolCallKind, map[string]any{"id": tc.ID, "name": tc.Function.Name, "raw_args": redactStr(cfg, tc.Function.Arguments)})
 
 				tool, ok := reg.Get(tc.Function.Name)
 				if !ok {
@@ -424,6 +467,18 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 
 					if cfg.Interactive {
 						unproductive = 0
+
+						// A human interjection drained mid-batch is the recovery input —
+						// deliver it instead of blocking awaitNext for a brand-new message
+						// (which would lose it).
+						if len(pendingMsgs) > 0 {
+							for _, um := range pendingMsgs {
+								emit.Emit(events.UserInput, map[string]any{"message_id": um.MessageID, "content_len": len(um.Content)})
+								msgs = append(msgs, llm.Message{Role: "user", Content: um.Content})
+							}
+
+							continue
+						}
 
 						var outcome string
 

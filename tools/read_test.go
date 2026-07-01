@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -191,4 +192,15 @@ func TestReadToolHugeLimitDoesNotEmpty(t *testing.T) {
 	out, err := rt.Execute(context.Background(), map[string]any{"path": "f.txt", "limit": 1e19})
 	require.NoError(t, err)
 	assert.Equal(t, "a\nb\nc\nd\n", out.Text)
+}
+
+func TestReadRejectsOversizeTextFile(t *testing.T) {
+	dir := t.TempDir()
+	big := filepath.Join(dir, "big.txt")
+	require.NoError(t, os.WriteFile(big, bytes.Repeat([]byte("a\n"), (readMaxFileBytes/2)+64), 0o644))
+
+	res, err := NewReadTool(dir).Execute(context.Background(), map[string]any{"path": "big.txt", "limit": 10})
+	require.NoError(t, err)
+	assert.Contains(t, res.Text, "too large")
+	assert.NotContains(t, res.Text, "aaaaaaaa") // content must not be loaded/returned
 }

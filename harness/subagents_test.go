@@ -2,6 +2,7 @@ package harness
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -207,6 +208,40 @@ func TestSpawnSubagentsToolOutputCapPropagates(t *testing.T) {
 	require.NotEmpty(t, toolResultContent, "tool-result message not found in second request")
 	assert.Contains(t, toolResultContent, "bytes truncated", "child tool output must be size-capped")
 	assert.LessOrEqual(t, len(toolResultContent), maxBytes+80, "child tool output must be bounded by the cap") // marker allowance
+}
+
+// TestSpawnSubagentsPropagatesProvider proves that SubagentOpts.Provider and
+// SubagentOpts.Reasoning are forwarded into the child Config, so a child's
+// outgoing llm.Request carries the parent's OpenRouter routing instead of
+// falling back to default provider selection.
+func TestSpawnSubagentsPropagatesProvider(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "f.txt"), []byte("hello"), 0o644))
+
+	capt := &capturingScriptedLLM{
+		tool:  "read",
+		args:  `{"path":"f.txt"}`,
+		final: "ok",
+	}
+
+	_, err := SpawnSubagents(context.Background(), capt, root, newEmitter(),
+		[]SubagentSpec{{Role: "reviewer", Prompt: "read f.txt"}},
+		SubagentOpts{
+			MaxDepth:     2,
+			DefaultModel: "test/model",
+			Provider:     json.RawMessage(`{"order":["x"]}`),
+			Reasoning:    json.RawMessage(`{"effort":"high"}`),
+		},
+	)
+	require.NoError(t, err)
+
+	capt.mu.Lock()
+	reqs := capt.requests
+	capt.mu.Unlock()
+
+	require.NotEmpty(t, reqs, "expected at least one captured request")
+	assert.JSONEq(t, `{"order":["x"]}`, string(reqs[0].Provider))
+	assert.JSONEq(t, `{"effort":"high"}`, string(reqs[0].Reasoning))
 }
 
 // captureLLM records the tool schemas presented on the first Send, then stops.

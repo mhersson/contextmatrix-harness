@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -145,9 +146,18 @@ func (c *Client) FetchCatalog(ctx context.Context) (Catalog, error) {
 		return nil, fmt.Errorf("catalog status %d: %s", resp.StatusCode, string(body))
 	}
 
-	if c.dialect == DialectOpenAI {
-		return parseCatalogOpenAI(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody+1))
+	if err != nil {
+		return nil, fmt.Errorf("read catalog body: %w", err)
 	}
 
-	return ParseCatalog(resp.Body)
+	if len(body) > maxResponseBody {
+		return nil, fmt.Errorf("catalog body exceeds %d bytes", maxResponseBody)
+	}
+
+	if c.dialect == DialectOpenAI {
+		return parseCatalogOpenAI(bytes.NewReader(body))
+	}
+
+	return ParseCatalog(bytes.NewReader(body))
 }

@@ -206,6 +206,98 @@ func TestRunContextLimitDisabledWhenWindowZero(t *testing.T) {
 	assert.Equal(t, "done", res.Reason)
 }
 
+func TestRun_CompactionNoProgressFallsThrough(t *testing.T) {
+	// A single assistant+3-tool group as history: snapping pulls the whole group
+	// into the kept tail, older collapses to [user "old"], and out == in (no shrink).
+	tcs := []llm.ToolCall{
+		{ID: "c1", Type: "function", Function: llm.FunctionCall{Name: "foo", Arguments: "{}"}},
+		{ID: "c2", Type: "function", Function: llm.FunctionCall{Name: "foo", Arguments: "{}"}},
+		{ID: "c3", Type: "function", Function: llm.FunctionCall{Name: "foo", Arguments: "{}"}},
+	}
+	history := []llm.Message{
+		{Role: "user", Content: "old"},
+		{Role: "assistant", ToolCalls: tcs},
+		{Role: "tool", ToolCallID: "c1", Content: "r1"},
+		{Role: "tool", ToolCallID: "c2", Content: "r2"},
+		{Role: "tool", ToolCallID: "c3", Content: "r3"},
+	}
+	fake := &capturingLLMSeq{responses: []llm.Response{
+		{Content: "turn1", Usage: llm.Usage{PromptTokens: 900}}, // >850 → triggers compaction
+		{Content: "SUMMARY"}, // compact Send
+	}}
+
+	var transcript bytes.Buffer
+
+	emit := events.NewEmitter(nil, &transcript)
+
+	res, err := Run(context.Background(), fake, tools.NewRegistry(), emit, "go", Config{
+		MaxTurns:      10,
+		SystemPrompt:  "SYS",
+		ContextWindow: 1000,
+		Compaction:    &Compaction{Threshold: 0.85, KeepRecentTurns: 4},
+		History:       history,
+	})
+	require.NoError(t, err)
+	// A no-op compaction must fall through to the hard stop, not loop or "complete".
+	assert.Equal(t, "context_limit", res.Reason)
+	require.Len(t, fake.requests, 2) // turn-1 SendStream + one compact Send; no turn-2
+
+	sawFailed := false
+
+	for _, ev := range parseEvents(t, transcript.String()) {
+		if ev.Kind == events.StateChange && ev.Data["event"] == "compaction_failed" {
+			sawFailed = true
+		}
+	}
+
+	assert.True(t, sawFailed, "no-progress compaction must emit compaction_failed")
+}
+
+func TestRun_CompactionCostIsCounted(t *testing.T) {
+	history := make([]llm.Message, 20)
+	for i := range history {
+		if i%2 == 0 {
+			history[i] = llm.Message{Role: "user", Content: fmt.Sprintf("user %d", i)}
+		} else {
+			history[i] = llm.Message{Role: "assistant", Content: fmt.Sprintf("assistant %d", i)}
+		}
+	}
+
+	fake := &capturingLLMSeq{responses: []llm.Response{
+		{Content: "turn1", Usage: llm.Usage{PromptTokens: 900, Cost: 0.01}},                         // triggers compaction
+		{Content: "SUMMARY", Usage: llm.Usage{PromptTokens: 500, CompletionTokens: 20, Cost: 0.10}}, // compact Send
+		{Content: "done", FinishReason: "stop", Usage: llm.Usage{Cost: 0.02}},
+	}}
+	res, err := Run(context.Background(), fake, tools.NewRegistry(), newEmitter(), "go", Config{
+		MaxTurns:      10,
+		SystemPrompt:  "SYS",
+		ContextWindow: 1000,
+		Compaction:    &Compaction{Threshold: 0.85, KeepRecentTurns: 2},
+		History:       history,
+	})
+	require.NoError(t, err)
+	assert.InEpsilon(t, 0.13, res.TotalCostUSD, 1e-9) // 0.01 + 0.10 + 0.02
+	assert.EqualValues(t, 1400, res.PromptTokens)     // 900 + 500
+	assert.EqualValues(t, 20, res.CompletionTokens)
+}
+
+func TestRun_CompactionThresholdAbove85DoesNotHardStopEarly(t *testing.T) {
+	reg := tools.NewRegistry(tools.NewReadTool(t.TempDir()))
+	f := &fakeLLM{responses: []llm.Response{
+		{Content: "ok", FinishReason: "stop", Usage: llm.Usage{PromptTokens: 175000}},
+	}}
+	// window 200000, Threshold 0.95 → effective compaction 190000; old hard stop 170000.
+	// 175000 is in the dead band: must NOT hard-stop.
+	res, err := Run(context.Background(), f, reg, newEmitter(), "task", Config{
+		MaxTurns:      10,
+		ContextWindow: 200000,
+		Compaction:    &Compaction{Threshold: 0.95, KeepRecentTurns: 2},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "done", res.Reason)
+	assert.True(t, res.Completed)
+}
+
 // bigTool is a fake tool that returns a large string with distinct head/tail content.
 type bigTool struct{ output string }
 
@@ -399,6 +491,50 @@ func TestRunToolErrorOutputCappedAndRedacted(t *testing.T) {
 	assert.Contains(t, toolResultContent, "bytes truncated", "oversized tool error must be size-capped")
 	assert.LessOrEqual(t, len(toolResultContent), maxBytes+80, "tool error must be bounded by the cap") // marker allowance
 	assert.NotContains(t, toolResultContent, seedSecret, "secret must be redacted on the error path")
+}
+
+// TestEmittedContentIsRedacted covers the ModelResponse and Thinking emit
+// sites: cfg.RedactToolOutput must scrub resp.Content and resp.Reasoning
+// before they reach the event stream/transcript, not just tool results.
+func TestEmittedContentIsRedacted(t *testing.T) {
+	f := &fakeLLM{responses: []llm.Response{
+		{Content: "leak SECRET here", Reasoning: "think SECRET", FinishReason: "stop"},
+	}}
+	var transcript bytes.Buffer
+	emit := events.NewEmitter(nil, &transcript)
+
+	_, err := Run(context.Background(), f, tools.NewRegistry(), emit, "task", Config{
+		MaxTurns:         1,
+		RedactToolOutput: func(s string) string { return strings.ReplaceAll(s, "SECRET", "***") },
+	})
+	require.NoError(t, err)
+	assert.NotContains(t, transcript.String(), "SECRET")
+	assert.Contains(t, transcript.String(), "***")
+}
+
+// TestEmittedToolCallArgsAreRedacted covers the third emit site: ToolCallKind
+// emits tc.Function.Arguments as "raw_args" before the call is dispatched, so
+// it must be routed through cfg.RedactToolOutput independently of the
+// tool-result redaction already covered by TestRunRedactToolOutput.
+func TestEmittedToolCallArgsAreRedacted(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "f.txt"), []byte("data"), 0o644))
+	reg := tools.NewRegistry(tools.NewReadTool(root))
+
+	f := &fakeLLM{responses: []llm.Response{
+		{ToolCalls: []llm.ToolCall{toolCall("1", "read", `{"path":"f.txt","note":"SECRET"}`)}},
+		{Content: "done", FinishReason: "stop"},
+	}}
+	var transcript bytes.Buffer
+	emit := events.NewEmitter(nil, &transcript)
+
+	_, err := Run(context.Background(), f, reg, emit, "task", Config{
+		MaxTurns:         10,
+		RedactToolOutput: func(s string) string { return strings.ReplaceAll(s, "SECRET", "***") },
+	})
+	require.NoError(t, err)
+	assert.NotContains(t, transcript.String(), "SECRET")
+	assert.Contains(t, transcript.String(), "***")
 }
 
 // scriptedInbox: queue of messages; Drain pops all pending; Wait pops one or
@@ -699,6 +835,88 @@ func TestRunDetectsIncapability(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "incapable", res.Reason)
 	assert.Less(t, res.Turns, 20, "incapable must fire before MaxTurns")
+}
+
+// pushOnStreamLLM pushes a human message into the inbox during the turn's stream
+// (after the top-of-turn drain), modelling an interjection that arrives while the
+// model is producing an all-unparseable, multi-tool-call turn.
+type pushOnStreamLLM struct {
+	inbox      *scriptedInbox
+	msg        UserMessage
+	pushOnTurn int
+	responses  []llm.Response
+	requests   []llm.Request
+	i          int
+}
+
+func (f *pushOnStreamLLM) Send(context.Context, llm.Request) (llm.Response, error) {
+	return llm.Response{FinishReason: "stop"}, nil
+}
+
+func (f *pushOnStreamLLM) SendStream(_ context.Context, req llm.Request, _ func(llm.Delta)) (llm.Response, error) {
+	f.requests = append(f.requests, req)
+	f.i++
+	if f.i == f.pushOnTurn {
+		f.inbox.push(f.msg)
+	}
+	if f.i-1 < len(f.responses) {
+		return f.responses[f.i-1], nil
+	}
+	return llm.Response{FinishReason: "stop"}, nil
+}
+
+func TestIncapableRecoveryDeliversStashedInterjection(t *testing.T) {
+	inbox := &scriptedInbox{closeErr: ErrInboxClosed} // Wait returns "done" if reached
+	fake := &pushOnStreamLLM{
+		inbox:      inbox,
+		msg:        UserMessage{MessageID: "interject-1", Content: "steer here"},
+		pushOnTurn: 1,
+		responses: []llm.Response{
+			{ToolCalls: []llm.ToolCall{ // two calls, both unparseable → turnHadCapableTool=false
+				toolCall("t1", "read", "{bad"),
+				toolCall("t2", "read", "{also-bad"),
+			}},
+			{Content: "done", FinishReason: "stop"}, // turn 2 after recovery
+		},
+	}
+	reg := tools.NewRegistry(tools.NewReadTool(t.TempDir()))
+
+	var transcript bytes.Buffer
+	emit := events.NewEmitter(nil, &transcript)
+
+	res, err := Run(context.Background(), fake, reg, emit, "task", Config{
+		Interactive:        true,
+		Inbox:              inbox,
+		IncapableThreshold: 1,
+	})
+	require.NoError(t, err)
+
+	delivered := false
+	for _, ev := range parseEvents(t, transcript.String()) {
+		if ev.Kind == events.UserInput && ev.Data["message_id"] == "interject-1" {
+			delivered = true
+		}
+	}
+
+	assert.True(t, delivered, "stashed interjection must be delivered, not dropped")
+	assert.Equal(t, "done", res.Reason)
+
+	// Turn 1 is the all-unparseable-tools turn (the interjection arrives mid-stream
+	// and is stashed, not sent yet); turn 2 is the recovery turn, which must carry
+	// the stashed interjection in its request history.
+	require.Len(t, fake.requests, 2, "expected one request for the unparseable turn and one for the recovery turn")
+
+	recoveryReq := fake.requests[1]
+
+	appended := false
+
+	for _, m := range recoveryReq.Messages {
+		if m.Role == "user" && m.Content == "steer here" {
+			appended = true
+		}
+	}
+
+	assert.True(t, appended, "recovery turn's request must include the stashed interjection as a user message")
 }
 
 func TestRun_SeedsHistoryBeforeTask(t *testing.T) {

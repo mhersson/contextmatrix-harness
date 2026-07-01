@@ -21,6 +21,9 @@ const (
 	readMaxBytes = 120_000
 	// sniffSize is the number of bytes inspected for binary detection.
 	sniffSize = 8192
+	// readMaxFileBytes caps the text read path so a huge file can't be slurped into
+	// memory before pagination. Above this, callers use grep/bash to inspect.
+	readMaxFileBytes = 8 << 20
 )
 
 // looksBinary reports whether p appears to be binary content.
@@ -94,6 +97,10 @@ func (t ReadTool) Execute(_ context.Context, args map[string]any) (Result, error
 
 	if looksBinary(sniff) {
 		return Result{Text: fmt.Sprintf("[binary file: %s, %d bytes — not shown]", rel, fi.Size())}, nil
+	}
+
+	if fi.Size() > readMaxFileBytes {
+		return Result{Text: fmt.Sprintf("[text file too large: %s, %d bytes — not shown; use grep or bash to inspect]", rel, fi.Size())}, nil
 	}
 
 	// Text path: rewind and read the whole file fresh (the sniff consumed the
