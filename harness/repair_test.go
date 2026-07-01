@@ -13,10 +13,18 @@ func TestParseArgs(t *testing.T) {
 	assert.Equal(t, "x", m["path"])
 	assert.InDelta(t, float64(2), m["n"], 1e-9)
 
-	_, err = parseArgs("")
-	require.Error(t, err)
+	// No-arg tools legitimately send empty arguments (some OpenAI-compatible
+	// proxies send "" instead of "{}"); normalize to an empty object.
+	m, err = parseArgs("")
+	require.NoError(t, err)
+	assert.NotNil(t, m)
+	assert.Empty(t, m)
 
-	_, err = parseArgs(`{"path":`) // truncated
+	m, err = parseArgs("   ")
+	require.NoError(t, err)
+	assert.Empty(t, m)
+
+	_, err = parseArgs(`{"path":`) // truncated -> still repairable
 	require.Error(t, err)
 }
 
