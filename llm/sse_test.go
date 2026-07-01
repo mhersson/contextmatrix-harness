@@ -91,6 +91,28 @@ func TestParseStream_AccumulatesReasoningWithNilOnDelta(t *testing.T) {
 	require.Equal(t, "Hello world", resp.Content)
 }
 
+// TestParseStreamBuilderAccumulation is the equality guard for the H2 perf
+// refactor: it asserts that Content, Reasoning, and Function.Arguments are
+// fully assembled from multi-frame SSE deltas. The test must PASS both before
+// and after the strings.Builder refactor — it is behavioral, not structural.
+func TestParseStreamBuilderAccumulation(t *testing.T) {
+	sse := strings.Join([]string{
+		`data: {"choices":[{"delta":{"reasoning":"Let ","content":"Hel","tool_calls":[{"index":0,"id":"c1","function":{"name":"fn","arguments":"{\"a"}}]}}]}`,
+		`data: {"choices":[{"delta":{"reasoning":"me.","content":"lo","tool_calls":[{"index":0,"function":{"arguments":"\":1}"}}]}}]}`,
+		`data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`,
+		`data: [DONE]`,
+	}, "\n") + "\n"
+
+	resp, err := parseStream(strings.NewReader(sse), nil)
+	require.NoError(t, err)
+	assert.Equal(t, "Hello", resp.Content)
+	assert.Equal(t, "Let me.", resp.Reasoning)
+	require.Len(t, resp.ToolCalls, 1)
+	assert.Equal(t, "c1", resp.ToolCalls[0].ID)
+	assert.Equal(t, "fn", resp.ToolCalls[0].Function.Name)
+	assert.JSONEq(t, `{"a":1}`, resp.ToolCalls[0].Function.Arguments)
+}
+
 func TestParseStreamTruncationDetection(t *testing.T) {
 	chunk := `data: {"choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}]}`
 	noFinish := `data: {"choices":[{"delta":{"content":"hi"}}]}`

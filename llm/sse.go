@@ -64,7 +64,12 @@ func parseStreamWithLimit(r io.Reader, onDelta func(Delta), maxLine int) (Respon
 
 	var resp Response
 
+	var contentBuilder strings.Builder
+
+	var reasoningBuilder strings.Builder
+
 	acc := map[int]*streamToolCall{}
+	argBuilders := map[int]*strings.Builder{}
 
 	var order []int
 
@@ -112,14 +117,14 @@ func parseStreamWithLimit(r io.Reader, onDelta func(Delta), maxLine int) (Respon
 
 			d := ch.Delta
 			if d.Content != "" {
-				resp.Content += d.Content
+				contentBuilder.WriteString(d.Content)
 				if onDelta != nil {
 					onDelta(Delta{Content: d.Content})
 				}
 			}
 
 			if d.Reasoning != "" {
-				resp.Reasoning += d.Reasoning
+				reasoningBuilder.WriteString(d.Reasoning)
 				if onDelta != nil {
 					onDelta(Delta{Reasoning: d.Reasoning})
 				}
@@ -145,10 +150,21 @@ func parseStreamWithLimit(r io.Reader, onDelta func(Delta), maxLine int) (Respon
 					cur.Function.Name = tc.Function.Name
 				}
 
-				cur.Function.Arguments += tc.Function.Arguments
+				if tc.Function.Arguments != "" {
+					ab, ok := argBuilders[tc.Index]
+					if !ok {
+						ab = &strings.Builder{}
+						argBuilders[tc.Index] = ab
+					}
+
+					ab.WriteString(tc.Function.Arguments)
+				}
 			}
 		}
 	}
+
+	resp.Content = contentBuilder.String()
+	resp.Reasoning = reasoningBuilder.String()
 
 	if err := sc.Err(); err != nil {
 		if errors.Is(err, bufio.ErrTooLong) {
@@ -170,10 +186,15 @@ func parseStreamWithLimit(r io.Reader, onDelta func(Delta), maxLine int) (Respon
 			typ = "function"
 		}
 
+		args := ""
+		if ab, ok := argBuilders[idx]; ok {
+			args = ab.String()
+		}
+
 		resp.ToolCalls = append(resp.ToolCalls, ToolCall{
 			ID:       tc.ID,
 			Type:     typ,
-			Function: FunctionCall{Name: tc.Function.Name, Arguments: tc.Function.Arguments},
+			Function: FunctionCall{Name: tc.Function.Name, Arguments: args},
 		})
 	}
 
