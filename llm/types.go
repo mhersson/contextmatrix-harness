@@ -89,7 +89,8 @@ type Request struct {
 	Provider  json.RawMessage `json:"provider,omitempty"`
 	Reasoning json.RawMessage `json:"reasoning,omitempty"`
 	Usage     *UsageOpt       `json:"usage,omitempty"`
-	// openai dialect only; set by encodeRequest, never by callers.
+	// openai dialect only; populated by encodeRequest, never by callers. Slated to
+	// move to a private wire struct in the next major version.
 	ReasoningEffort string         `json:"reasoning_effort,omitempty"`
 	StreamOptions   *streamOptions `json:"stream_options,omitempty"`
 }
