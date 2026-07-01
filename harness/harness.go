@@ -231,7 +231,7 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 			if cfg.Compaction != nil {
 				if resp.Usage.PromptTokens >= effectiveCompactionThreshold(cfg.ContextWindow, cfg.Compaction.Threshold) {
 					newMsgs, cerr := compact(ctx, client, cfg, msgs, cfg.Compaction.KeepRecentTurns, emit)
-					if cerr == nil {
+					if cerr == nil && len(newMsgs) < len(msgs) {
 						// Discard the triggering turn's response (its tool calls never
 						// execute) and still count the turn — a transcript consumer may
 						// see a model_response/thinking for an abandoned turn followed
@@ -241,12 +241,22 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 						continue
 					}
 
-					// Compaction failed (e.g. nothing left to summarize): emit a
-					// warning and fall through to the hard-stop check below.
-					emit.Emit(events.StateChange, map[string]any{
-						"event": "compaction_failed",
-						"error": cerr.Error(),
-					})
+					if cerr == nil {
+						// Compaction produced no forward progress (snapped tail already
+						// dominates the window). Fall through to the hard stop instead of
+						// re-compacting forever.
+						emit.Emit(events.StateChange, map[string]any{
+							"event": "compaction_failed",
+							"error": "no forward progress",
+						})
+					} else {
+						// Compaction failed (e.g. nothing left to summarize): emit a
+						// warning and fall through to the hard-stop check below.
+						emit.Emit(events.StateChange, map[string]any{
+							"event": "compaction_failed",
+							"error": cerr.Error(),
+						})
+					}
 				}
 			}
 

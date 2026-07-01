@@ -206,6 +206,53 @@ func TestRunContextLimitDisabledWhenWindowZero(t *testing.T) {
 	assert.Equal(t, "done", res.Reason)
 }
 
+func TestRun_CompactionNoProgressFallsThrough(t *testing.T) {
+	// A single assistant+3-tool group as history: snapping pulls the whole group
+	// into the kept tail, older collapses to [user "old"], and out == in (no shrink).
+	tcs := []llm.ToolCall{
+		{ID: "c1", Type: "function", Function: llm.FunctionCall{Name: "foo", Arguments: "{}"}},
+		{ID: "c2", Type: "function", Function: llm.FunctionCall{Name: "foo", Arguments: "{}"}},
+		{ID: "c3", Type: "function", Function: llm.FunctionCall{Name: "foo", Arguments: "{}"}},
+	}
+	history := []llm.Message{
+		{Role: "user", Content: "old"},
+		{Role: "assistant", ToolCalls: tcs},
+		{Role: "tool", ToolCallID: "c1", Content: "r1"},
+		{Role: "tool", ToolCallID: "c2", Content: "r2"},
+		{Role: "tool", ToolCallID: "c3", Content: "r3"},
+	}
+	fake := &capturingLLMSeq{responses: []llm.Response{
+		{Content: "turn1", Usage: llm.Usage{PromptTokens: 900}}, // >850 → triggers compaction
+		{Content: "SUMMARY"}, // compact Send
+	}}
+
+	var transcript bytes.Buffer
+
+	emit := events.NewEmitter(nil, &transcript)
+
+	res, err := Run(context.Background(), fake, tools.NewRegistry(), emit, "go", Config{
+		MaxTurns:      10,
+		SystemPrompt:  "SYS",
+		ContextWindow: 1000,
+		Compaction:    &Compaction{Threshold: 0.85, KeepRecentTurns: 4},
+		History:       history,
+	})
+	require.NoError(t, err)
+	// A no-op compaction must fall through to the hard stop, not loop or "complete".
+	assert.Equal(t, "context_limit", res.Reason)
+	require.Len(t, fake.requests, 2) // turn-1 SendStream + one compact Send; no turn-2
+
+	sawFailed := false
+
+	for _, ev := range parseEvents(t, transcript.String()) {
+		if ev.Kind == events.StateChange && ev.Data["event"] == "compaction_failed" {
+			sawFailed = true
+		}
+	}
+
+	assert.True(t, sawFailed, "no-progress compaction must emit compaction_failed")
+}
+
 // bigTool is a fake tool that returns a large string with distinct head/tail content.
 type bigTool struct{ output string }
 

@@ -68,6 +68,9 @@ func compact(ctx context.Context, client llm.LLM, cfg Config, msgs []llm.Message
 	}
 
 	older := msgs[sysCount:b]
+	if len(older) == 0 {
+		return nil, fmt.Errorf("compaction: snapped boundary left nothing to summarize (b=%d sysCount=%d keepRecent=%d)", b, sysCount, keepRecent)
+	}
 
 	req := llm.Request{
 		Model:    cfg.Model,
