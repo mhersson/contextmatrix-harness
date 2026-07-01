@@ -118,6 +118,19 @@ func imageMessage(images []llm.ImageURL) llm.Message {
 	return llm.Message{Role: "user", ContentParts: parts}
 }
 
+// redactStr applies cfg.RedactToolOutput to s when configured, otherwise
+// returns s unchanged. Used to scrub raw model content/reasoning/tool-call
+// arguments before they reach the event stream and JSON transcript — the
+// conversation history (msgs) is never passed through this, so the model
+// still executes with the real, unredacted content.
+func redactStr(cfg Config, s string) string {
+	if cfg.RedactToolOutput != nil {
+		return cfg.RedactToolOutput(s)
+	}
+
+	return s
+}
+
 // Run drives the bare agent loop: model call → tool dispatch → repeat, until the
 // model emits no tool calls (done) or a cap trips. FSM-free; no orchestration.
 func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.Emitter, task string, cfg Config) (Result, error) {
@@ -214,13 +227,13 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 		res.Output = resp.Content
 
 		if resp.Reasoning != "" {
-			emit.Emit(events.Thinking, map[string]any{"turn": res.Turns, "content": resp.Reasoning})
+			emit.Emit(events.Thinking, map[string]any{"turn": res.Turns, "content": redactStr(cfg, resp.Reasoning)})
 		}
 
 		emit.Emit(events.ModelResponse, map[string]any{
 			"turn": res.Turns, "finish_reason": resp.FinishReason,
 			"tool_calls": len(resp.ToolCalls), "content_len": len(resp.Content),
-			"content": resp.Content, "model": cfg.Model,
+			"content": redactStr(cfg, resp.Content), "model": cfg.Model,
 		})
 		emit.Emit(events.UsageKind, map[string]any{
 			"prompt_tokens": resp.Usage.PromptTokens, "completion_tokens": resp.Usage.CompletionTokens,
@@ -366,7 +379,7 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 			func() {
 				res.ToolCallCount++
 
-				emit.Emit(events.ToolCallKind, map[string]any{"id": tc.ID, "name": tc.Function.Name, "raw_args": tc.Function.Arguments})
+				emit.Emit(events.ToolCallKind, map[string]any{"id": tc.ID, "name": tc.Function.Name, "raw_args": redactStr(cfg, tc.Function.Arguments)})
 
 				tool, ok := reg.Get(tc.Function.Name)
 				if !ok {

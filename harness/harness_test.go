@@ -493,6 +493,50 @@ func TestRunToolErrorOutputCappedAndRedacted(t *testing.T) {
 	assert.NotContains(t, toolResultContent, seedSecret, "secret must be redacted on the error path")
 }
 
+// TestEmittedContentIsRedacted covers the ModelResponse and Thinking emit
+// sites: cfg.RedactToolOutput must scrub resp.Content and resp.Reasoning
+// before they reach the event stream/transcript, not just tool results.
+func TestEmittedContentIsRedacted(t *testing.T) {
+	f := &fakeLLM{responses: []llm.Response{
+		{Content: "leak SECRET here", Reasoning: "think SECRET", FinishReason: "stop"},
+	}}
+	var transcript bytes.Buffer
+	emit := events.NewEmitter(nil, &transcript)
+
+	_, err := Run(context.Background(), f, tools.NewRegistry(), emit, "task", Config{
+		MaxTurns:         1,
+		RedactToolOutput: func(s string) string { return strings.ReplaceAll(s, "SECRET", "***") },
+	})
+	require.NoError(t, err)
+	assert.NotContains(t, transcript.String(), "SECRET")
+	assert.Contains(t, transcript.String(), "***")
+}
+
+// TestEmittedToolCallArgsAreRedacted covers the third emit site: ToolCallKind
+// emits tc.Function.Arguments as "raw_args" before the call is dispatched, so
+// it must be routed through cfg.RedactToolOutput independently of the
+// tool-result redaction already covered by TestRunRedactToolOutput.
+func TestEmittedToolCallArgsAreRedacted(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "f.txt"), []byte("data"), 0o644))
+	reg := tools.NewRegistry(tools.NewReadTool(root))
+
+	f := &fakeLLM{responses: []llm.Response{
+		{ToolCalls: []llm.ToolCall{toolCall("1", "read", `{"path":"f.txt","note":"SECRET"}`)}},
+		{Content: "done", FinishReason: "stop"},
+	}}
+	var transcript bytes.Buffer
+	emit := events.NewEmitter(nil, &transcript)
+
+	_, err := Run(context.Background(), f, reg, emit, "task", Config{
+		MaxTurns:         10,
+		RedactToolOutput: func(s string) string { return strings.ReplaceAll(s, "SECRET", "***") },
+	})
+	require.NoError(t, err)
+	assert.NotContains(t, transcript.String(), "SECRET")
+	assert.Contains(t, transcript.String(), "***")
+}
+
 // scriptedInbox: queue of messages; Drain pops all pending; Wait pops one or
 // returns closeErr when the queue is empty. When deliverViaWaitOnly is set,
 // Drain returns nothing so the pending queue is delivered exclusively through
