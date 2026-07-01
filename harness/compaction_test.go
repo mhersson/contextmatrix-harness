@@ -179,7 +179,7 @@ func TestCompactForwardsImagePrefixThenDropsIt(t *testing.T) {
 
 	capt := &capturingLLM{}
 
-	out, err := compact(context.Background(), capt, Config{Model: "m"}, msgs, 1, newEmitter())
+	out, _, err := compact(context.Background(), capt, Config{Model: "m"}, msgs, 1, newEmitter())
 	require.NoError(t, err)
 
 	// (a) The summarizer received the image-bearing prefix verbatim (not stripped).
@@ -303,7 +303,7 @@ func TestCompactPreservesToolGroups(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			capt := &capturingLLM{}
 
-			out, err := compact(context.Background(), capt, Config{Model: "m"}, tt.msgs, tt.keepRecent, newEmitter())
+			out, _, err := compact(context.Background(), capt, Config{Model: "m"}, tt.msgs, tt.keepRecent, newEmitter())
 			require.NoError(t, err)
 
 			assertWellPaired(t, out)
@@ -334,7 +334,7 @@ func TestCompactKeepsRecentImageVerbatim(t *testing.T) {
 		imgMsg,
 	}
 
-	out, err := compact(context.Background(), &capturingLLM{}, Config{Model: "m"}, msgs, 1, newEmitter())
+	out, _, err := compact(context.Background(), &capturingLLM{}, Config{Model: "m"}, msgs, 1, newEmitter())
 	require.NoError(t, err)
 
 	last := out[len(out)-1]

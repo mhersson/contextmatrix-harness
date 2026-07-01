@@ -253,6 +253,34 @@ func TestRun_CompactionNoProgressFallsThrough(t *testing.T) {
 	assert.True(t, sawFailed, "no-progress compaction must emit compaction_failed")
 }
 
+func TestRun_CompactionCostIsCounted(t *testing.T) {
+	history := make([]llm.Message, 20)
+	for i := range history {
+		if i%2 == 0 {
+			history[i] = llm.Message{Role: "user", Content: fmt.Sprintf("user %d", i)}
+		} else {
+			history[i] = llm.Message{Role: "assistant", Content: fmt.Sprintf("assistant %d", i)}
+		}
+	}
+
+	fake := &capturingLLMSeq{responses: []llm.Response{
+		{Content: "turn1", Usage: llm.Usage{PromptTokens: 900, Cost: 0.01}},                         // triggers compaction
+		{Content: "SUMMARY", Usage: llm.Usage{PromptTokens: 500, CompletionTokens: 20, Cost: 0.10}}, // compact Send
+		{Content: "done", FinishReason: "stop", Usage: llm.Usage{Cost: 0.02}},
+	}}
+	res, err := Run(context.Background(), fake, tools.NewRegistry(), newEmitter(), "go", Config{
+		MaxTurns:      10,
+		SystemPrompt:  "SYS",
+		ContextWindow: 1000,
+		Compaction:    &Compaction{Threshold: 0.85, KeepRecentTurns: 2},
+		History:       history,
+	})
+	require.NoError(t, err)
+	assert.InEpsilon(t, 0.13, res.TotalCostUSD, 1e-9) // 0.01 + 0.10 + 0.02
+	assert.EqualValues(t, 1400, res.PromptTokens)     // 900 + 500
+	assert.EqualValues(t, 20, res.CompletionTokens)
+}
+
 // bigTool is a fake tool that returns a large string with distinct head/tail content.
 type bigTool struct{ output string }
 

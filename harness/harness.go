@@ -230,7 +230,20 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 		if cfg.ContextWindow > 0 {
 			if cfg.Compaction != nil {
 				if resp.Usage.PromptTokens >= effectiveCompactionThreshold(cfg.ContextWindow, cfg.Compaction.Threshold) {
-					newMsgs, cerr := compact(ctx, client, cfg, msgs, cfg.Compaction.KeepRecentTurns, emit)
+					newMsgs, cUsage, cerr := compact(ctx, client, cfg, msgs, cfg.Compaction.KeepRecentTurns, emit)
+					if cerr == nil {
+						// The summarize call is real and billable regardless of whether it
+						// shrank the history, so it is counted against the budget here,
+						// before the shrink/no-progress branch below.
+						res.TotalCostUSD += cUsage.Cost
+						res.PromptTokens += int64(cUsage.PromptTokens)
+						res.CompletionTokens += int64(cUsage.CompletionTokens)
+						emit.Emit(events.UsageKind, map[string]any{
+							"prompt_tokens": cUsage.PromptTokens, "completion_tokens": cUsage.CompletionTokens,
+							"cost_usd": cUsage.Cost, "model": cfg.Model, "phase": "compaction",
+						})
+					}
+
 					if cerr == nil && len(newMsgs) < len(msgs) {
 						// Discard the triggering turn's response (its tool calls never
 						// execute) and still count the turn — a transcript consumer may
