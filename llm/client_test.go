@@ -98,3 +98,35 @@ func TestClientNon200(t *testing.T) {
 	assert.Contains(t, err.Error(), "429")
 	assert.Contains(t, err.Error(), "rate limited")
 }
+
+// TestSendCapsOversizeBody verifies that Send returns a "too large" error when a
+// server returns a body that exceeds maxResponseBody. Approach (b) was chosen
+// (explicit error, directly assertable) over silent truncation.
+func TestSendCapsOversizeBody(t *testing.T) {
+	oversized := make([]byte, maxResponseBody+1)
+
+	t.Run("oversize body returns error", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write(oversized) //nolint:errcheck
+		}))
+		defer srv.Close()
+
+		c := NewClient("k", WithBaseURL(srv.URL))
+		_, err := c.Send(context.Background(), Request{Messages: []Message{{Role: "user"}}})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "exceeds")
+	})
+
+	t.Run("normal small body still works", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			io.WriteString(w, `{"model":"m","choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}]}`) //nolint:errcheck
+		}))
+		defer srv.Close()
+
+		c := NewClient("k", WithBaseURL(srv.URL))
+		resp, err := c.Send(context.Background(), Request{Messages: []Message{{Role: "user"}}})
+		require.NoError(t, err)
+		assert.Equal(t, "ok", resp.Content)
+	})
+}
