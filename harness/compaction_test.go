@@ -205,6 +205,121 @@ func TestCompactForwardsImagePrefixThenDropsIt(t *testing.T) {
 	assert.Empty(t, out[1].ContentParts, "summary message must not carry image parts")
 }
 
+// assertWellPaired verifies that msgs contains no broken tool-call / tool-result
+// grouping:
+//   - every "tool" message has a preceding "assistant" message whose ToolCalls
+//     list contains the matching ToolCallID
+//   - every "assistant" message with ToolCalls is immediately followed by
+//     contiguous "tool" result messages that cover every ID it issued
+func assertWellPaired(t *testing.T, msgs []llm.Message) {
+	t.Helper()
+
+	for i, m := range msgs {
+		if m.Role == "tool" {
+			var owned bool
+
+			for j := 0; j < i; j++ {
+				for _, tc := range msgs[j].ToolCalls {
+					if tc.ID == m.ToolCallID {
+						owned = true
+
+						break
+					}
+				}
+
+				if owned {
+					break
+				}
+			}
+
+			assert.True(t, owned,
+				"tool message at index %d (ToolCallID=%q) has no preceding assistant that owns it", i, m.ToolCallID)
+		}
+
+		if m.Role == "assistant" && len(m.ToolCalls) > 0 {
+			needed := make(map[string]bool, len(m.ToolCalls))
+
+			for _, tc := range m.ToolCalls {
+				needed[tc.ID] = false
+			}
+
+			for j := i + 1; j < len(msgs) && msgs[j].Role == "tool"; j++ {
+				needed[msgs[j].ToolCallID] = true
+			}
+
+			for id, found := range needed {
+				assert.True(t, found,
+					"assistant at index %d issued tool call %q but no subsequent tool result found", i, id)
+			}
+		}
+	}
+}
+
+// TestCompactPreservesToolGroups verifies that compact() never splits a
+// tool-call / tool-result group across the compaction boundary: every
+// "tool" message in the kept slice must be owned by an "assistant" that is
+// also in the kept slice, and the summarizer must not receive an older prefix
+// that ends with an unanswered assistant tool_calls block.
+func TestCompactPreservesToolGroups(t *testing.T) {
+	t.Helper()
+
+	toolCalls := []llm.ToolCall{
+		{ID: "call-X", Type: "function", Function: llm.FunctionCall{Name: "foo", Arguments: "{}"}},
+		{ID: "call-Y", Type: "function", Function: llm.FunctionCall{Name: "bar", Arguments: "{}"}},
+		{ID: "call-Z", Type: "function", Function: llm.FunctionCall{Name: "baz", Arguments: "{}"}},
+	}
+
+	base := []llm.Message{
+		{Role: "system", Content: "SYS"},
+		{Role: "user", Content: "u1"},
+		{Role: "assistant", Content: "a1"},
+		{Role: "user", Content: "u2"},
+		{Role: "assistant", ToolCalls: toolCalls},
+		{Role: "tool", ToolCallID: "call-X", Content: "result-X"},
+		{Role: "tool", ToolCallID: "call-Y", Content: "result-Y"},
+		{Role: "tool", ToolCallID: "call-Z", Content: "result-Z"},
+	}
+
+	withTrailing := append(append([]llm.Message(nil), base...), llm.Message{Role: "user", Content: "u3"})
+
+	tests := []struct {
+		name       string
+		msgs       []llm.Message
+		keepRecent int
+	}{
+		{
+			name:       "keepRecent splits mid-group no trailing message",
+			msgs:       base,
+			keepRecent: 2,
+		},
+		{
+			name:       "keepRecent splits mid-group with trailing user message",
+			msgs:       withTrailing,
+			keepRecent: 2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			capt := &capturingLLM{}
+
+			out, err := compact(context.Background(), capt, Config{Model: "m"}, tt.msgs, tt.keepRecent, newEmitter())
+			require.NoError(t, err)
+
+			assertWellPaired(t, out)
+
+			// The older slice sent to the summarizer must not end with an assistant
+			// that has unanswered tool_calls — that would produce a malformed request
+			// and an HTTP 400 from the provider.
+			if len(capt.last.Messages) > 1 {
+				lastOlder := capt.last.Messages[len(capt.last.Messages)-1]
+				assert.False(t, lastOlder.Role == "assistant" && len(lastOlder.ToolCalls) > 0,
+					"summarizer received an older prefix ending with unanswered assistant tool_calls")
+			}
+		})
+	}
+}
+
 func TestCompactKeepsRecentImageVerbatim(t *testing.T) {
 	imgMsg := llm.Message{Role: "user", ContentParts: []llm.ContentPart{
 		{Type: "text", Text: "look"},
