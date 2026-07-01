@@ -12,7 +12,11 @@ import (
 func parseArgs(raw string) (map[string]any, error) {
 	s := strings.TrimSpace(raw)
 	if s == "" {
-		return nil, fmt.Errorf("empty arguments")
+		// No-argument tools legitimately arrive with empty arguments — real
+		// OpenAI sends "{}", but some OpenAI-compatible proxies (e.g. Anthropic/
+		// Bedrock behind an OpenAI shim) send "". Normalize to an empty object
+		// and dispatch, rather than forcing a repair loop that never converges.
+		s = "{}"
 	}
 
 	var m map[string]any
