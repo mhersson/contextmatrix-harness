@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"syscall"
@@ -12,6 +13,12 @@ import (
 )
 
 const defaultBashMaxTimeout = 600 // seconds — hard server-side ceiling
+
+// bashWaitDelay bounds cmd.Wait after the child exits (or is killed) while a
+// descendant that escaped the process-group SIGKILL (e.g. via setsid) still
+// holds the output pipe. Without it, Wait blocks until pipe EOF — potentially
+// forever — wedging the turn past both the timeout and ctx cancellation.
+const bashWaitDelay = 2 * time.Second
 
 type BashTool struct {
 	root       string
@@ -80,6 +87,7 @@ func (t BashTool) Execute(ctx context.Context, args map[string]any) (Result, err
 	// New process group so we can signal the whole tree (the child is the
 	// group leader: pgid == child pid). Plain ctx-cancel leaves grandchildren.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.WaitDelay = bashWaitDelay
 
 	cw := &capWriter{limit: subprocessOutputCap}
 
@@ -114,7 +122,13 @@ func (t BashTool) Execute(ctx context.Context, args map[string]any) (Result, err
 		return Result{Text: cw.String()}, ctx.Err()
 	case werr := <-done:
 		res := cw.String()
-		if werr != nil {
+
+		switch {
+		case errors.Is(werr, exec.ErrWaitDelay):
+			// The command itself succeeded; a surviving background process still
+			// holds the output pipe. Not a command failure.
+			res += "\n[stopped reading output: a background process still holds the output pipe]"
+		case werr != nil:
 			res += fmt.Sprintf("\n[command exited with error: %v]", werr)
 		}
 
