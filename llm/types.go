@@ -20,8 +20,11 @@ type Message struct {
 
 // MarshalJSON emits `content` as the parts array when ContentParts is set,
 // otherwise as the string Content (byte-identical to the prior wire form).
-// When both are empty (e.g. a tool-call-only assistant message) `content` is
-// omitted, exactly as before.
+// When both are empty `content` is omitted — except for an assistant message
+// with no tool calls, which emits an explicit `"content":""`: the Chat
+// Completions contract requires assistant content unless tool_calls is
+// present, and strict OpenAI-compatible endpoints reject a bare
+// {"role":"assistant"} on every replay of the history.
 func (m Message) MarshalJSON() ([]byte, error) {
 	type wire struct {
 		Role       string     `json:"role"`
@@ -37,6 +40,8 @@ func (m Message) MarshalJSON() ([]byte, error) {
 		w.Content = m.ContentParts
 	case m.Content != "":
 		w.Content = m.Content
+	case m.Role == "assistant" && len(m.ToolCalls) == 0:
+		w.Content = "" // non-nil any: emitted as "content":""
 	}
 
 	return json.Marshal(w)

@@ -73,3 +73,39 @@ func TestMessageMarshalJSON_OpenAIImageShapeNotAnthropic(t *testing.T) {
 	assert.Contains(t, string(b), `"image_url"`)
 	assert.NotContains(t, string(b), `"source"`) // not the Anthropic content-block shape
 }
+
+func TestMessageMarshalJSON_AssistantEmptyContentIsExplicit(t *testing.T) {
+	tests := []struct {
+		name string
+		msg  Message
+		want string
+	}{
+		{
+			// Bare {"role":"assistant"} violates the Chat Completions contract
+			// (assistant needs content unless tool_calls is present) and poisons
+			// replayed Inbox-mode history on strict endpoints.
+			name: "assistant with no content and no tool calls emits explicit empty content",
+			msg:  Message{Role: "assistant"},
+			want: `{"role":"assistant","content":""}`,
+		},
+		{
+			name: "assistant with tool calls keeps omitting content",
+			msg: Message{Role: "assistant", ToolCalls: []ToolCall{
+				{ID: "1", Type: "function", Function: FunctionCall{Name: "x", Arguments: "{}"}},
+			}},
+			want: `{"role":"assistant","tool_calls":[{"id":"1","type":"function","function":{"name":"x","arguments":"{}"}}]}`,
+		},
+		{
+			name: "non-assistant empty content is unchanged (omitted)",
+			msg:  Message{Role: "user"},
+			want: `{"role":"user"}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b, err := json.Marshal(tt.msg)
+			require.NoError(t, err)
+			assert.JSONEq(t, tt.want, string(b))
+		})
+	}
+}

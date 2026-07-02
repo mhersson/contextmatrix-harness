@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -24,7 +25,7 @@ func (t EditTool) Schema() llm.Tool {
 			"type":"object",
 			"properties":{
 				"path":{"type":"string","description":"file path relative to the workspace root"},
-				"old_string":{"type":"string","description":"exact text to replace"},
+				"old_string":{"type":"string","description":"exact text to replace; must be non-empty"},
 				"new_string":{"type":"string","description":"replacement text"},
 				"replace_all":{"type":"boolean","description":"optional; replace every occurrence"}
 			},
@@ -42,6 +43,10 @@ func (t EditTool) Execute(_ context.Context, args map[string]any) (Result, error
 	oldStr, err := requireString(args, "old_string")
 	if err != nil {
 		return Result{}, err
+	}
+
+	if oldStr == "" {
+		return Result{}, errors.New("old_string must be non-empty; use the write tool to create or overwrite file content")
 	}
 
 	newStr, err := requireString(args, "new_string")

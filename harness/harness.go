@@ -25,8 +25,10 @@ const defaultIncapableThreshold = 3
 const ReasonIncapable = "incapable"
 
 // contextLimitThreshold is the fraction of the model's context window that, once
-// the prompt reaches it, makes the harness stop and return incomplete (v1 has
-// no compactor). Detection uses the provider's authoritative prompt_tokens.
+// the prompt reaches it, makes the harness stop and return incomplete when no
+// Compaction is configured. With Config.Compaction set, in-window compaction
+// runs first and this remains the fall-through hard stop. Detection uses the
+// provider's authoritative prompt_tokens.
 const contextLimitThreshold = 0.85
 
 // Compaction controls in-window context compaction. When non-nil, the harness
@@ -67,7 +69,7 @@ type Config struct {
 
 type Result struct {
 	Completed        bool
-	Reason           string // done | max_turns | max_cost | context_limit | incapable | error
+	Reason           string // done | max_turns | max_cost | context_limit | incapable | error | canceled
 	Turns            int
 	TotalCostUSD     float64
 	PromptTokens     int64
@@ -186,7 +188,12 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 
 		resp, err := client.SendStream(ctx, req, nil)
 		if err != nil {
-			emit.Emit(events.ErrorKind, map[string]any{"error": err.Error()})
+			// Transport errors embed the provider response body (llm/client.go),
+			// so this emit goes through the same redaction and size cap as every
+			// other content-bearing emit. The returned err stays raw for the caller.
+			emit.Emit(events.ErrorKind, map[string]any{
+				"error": tools.HeadTail(redactStr(cfg, err.Error()), cfg.ToolOutputMaxBytes),
+			})
 
 			if cfg.Interactive {
 				var (
