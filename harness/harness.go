@@ -186,7 +186,12 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 
 		resp, err := client.SendStream(ctx, req, nil)
 		if err != nil {
-			emit.Emit(events.ErrorKind, map[string]any{"error": err.Error()})
+			// Transport errors embed the provider response body (llm/client.go),
+			// so this emit goes through the same redaction and size cap as every
+			// other content-bearing emit. The returned err stays raw for the caller.
+			emit.Emit(events.ErrorKind, map[string]any{
+				"error": tools.HeadTail(redactStr(cfg, err.Error()), cfg.ToolOutputMaxBytes),
+			})
 
 			if cfg.Interactive {
 				var (

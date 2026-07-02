@@ -1262,3 +1262,108 @@ func TestMultiImageAggregation(t *testing.T) {
 	require.NotNil(t, img.ContentParts[2].ImageURL)
 	assert.Equal(t, "data:image/png;base64,IMG2", img.ContentParts[2].ImageURL.URL)
 }
+
+// TestTransportErrorEmitIsRedactedAndCapped covers the last content-bearing
+// emit site: a SendStream error embeds the provider response body (up to
+// 8 MiB), so the error event must pass through cfg.RedactToolOutput and the
+// ToolOutputMaxBytes cap like every other emit — and in the correct order
+// (redact, then truncate), never the reverse.
+//
+// Two seed secrets are placed to straddle tools.HeadTail's two cut boundaries
+// (truncate.go:14-15: head = limit*2/3, tail = limit-head) rather than
+// sitting entirely inside the discarded middle. A secret that straddles a cut
+// survives as a partial, non-matching fragment on the "kept" side if
+// truncation runs before redaction — which the exact-literal redact pass can
+// no longer catch, because the fragment isn't the full secret string. If
+// redaction runs first (correct order), the whole secret is masked before any
+// cut exists, so no fragment of it can ever appear in the output.
+func TestTransportErrorEmitIsRedactedAndCapped(t *testing.T) {
+	const (
+		maxBytes  = 1000
+		errPrefix = "llm endpoint status 502: " // must match the fmt.Errorf format below
+
+		secretHead = "sk-or-v1-headstraddle-secretA1"
+		secretTail = "sk-or-v1-tailstraddle-secretB2"
+
+		// Bytes of each secret left on the "kept" side of its straddled cut.
+		headSurvive = 8
+		tailSurvive = 8
+	)
+
+	// Mirrors tools.HeadTail's own split so the placement below stays correct
+	// even if ToolOutputMaxBytes changes.
+	head := maxBytes * 2 / 3
+	tail := maxBytes - head
+
+	// Place secretHead so the head-cut (offset `head` in the full error
+	// string s = errPrefix+body) lands `headSurvive` bytes into it: a prefix
+	// fragment survives in the kept head, the rest falls into the discarded
+	// middle.
+	bodyHeadCut := head - len(errPrefix)
+	require.Greater(t, bodyHeadCut, headSurvive, "test arithmetic: head cut must land inside secretHead")
+
+	headFillerLen := bodyHeadCut - headSurvive
+
+	// Place secretTail so the tail-cut (offset len(s)-tail, equivalently
+	// len(body)-tail in body coordinates) lands `tailSurvive` bytes before its
+	// end: the discarded middle swallows its prefix, and a suffix fragment
+	// survives in the kept tail.
+	require.Greater(t, tail, tailSurvive, "test arithmetic: tail cut must land inside secretTail")
+
+	tailFillerLen := tail - tailSurvive
+
+	body := strings.Repeat("E", headFillerLen) + secretHead +
+		strings.Repeat("X", 50000) +
+		secretTail + strings.Repeat("F", tailFillerLen)
+
+	f := &scriptedLLMWithErrors{results: []scriptedCall{
+		{err: fmt.Errorf("llm endpoint status 502: %s", body)},
+	}}
+
+	var transcript bytes.Buffer
+
+	emit := events.NewEmitter(nil, &transcript)
+
+	r := redact.New([]string{secretHead, secretTail})
+
+	res, err := Run(context.Background(), f, tools.NewRegistry(), emit, "task", Config{
+		MaxTurns:           5,
+		ToolOutputMaxBytes: maxBytes,
+		RedactToolOutput:   r.Apply,
+	})
+	require.Error(t, err)
+	assert.Equal(t, "error", res.Reason)
+
+	// The error RETURNED by Run must stay raw and uncapped: consumers handle
+	// redaction/truncation themselves, and only the emitted event is
+	// sanitized.
+	wantErr := errPrefix + body
+	assert.Equal(t, wantErr, err.Error(), "returned error must be byte-identical to the raw transport error")
+	assert.Contains(t, err.Error(), secretHead, "returned error must retain the raw secret, unredacted")
+	assert.Contains(t, err.Error(), secretTail, "returned error must retain the raw secret, unredacted")
+	assert.Greater(t, len(err.Error()), maxBytes, "returned error must not be size-capped")
+
+	s := transcript.String()
+	assert.NotContains(t, s, secretHead, "secret must be redacted on the transport-error emit path")
+	assert.NotContains(t, s, secretTail, "secret must be redacted on the transport-error emit path")
+	assert.Contains(t, s, "bytes truncated", "oversized transport error must be size-capped")
+
+	// Discriminates redact-then-truncate (correct) from truncate-then-redact
+	// (regression): only the buggy order leaves one of these fragments
+	// intact, since truncation would run before the exact-literal redact pass
+	// ever sees the (now-fragmented) secret.
+	headFragment := secretHead[:headSurvive]
+	tailFragment := secretTail[len(secretTail)-tailSurvive:]
+	assert.NotContains(t, s, headFragment, "head-cut straddling secret fragment leaked: truncation ran before redaction")
+	assert.NotContains(t, s, tailFragment, "tail-cut straddling secret fragment leaked: truncation ran before redaction")
+
+	for _, ev := range parseEvents(t, s) {
+		if ev.Kind != events.ErrorKind {
+			continue
+		}
+
+		errStr, ok := ev.Data["error"].(string)
+		require.True(t, ok, "error event must carry a string error")
+		assert.LessOrEqual(t, len(errStr), maxBytes+80, "error event must be bounded by the cap") // marker allowance
+	}
+}
