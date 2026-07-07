@@ -49,3 +49,36 @@ func TestWriteToolRequiresPathAndContent(t *testing.T) {
 	_, err = NewWriteTool(root).Execute(context.Background(), map[string]any{"path": "a.txt"})
 	require.Error(t, err)
 }
+
+func TestWriteToolNormalizesTrailingNewline(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{"missing newline gets one", "one\ntwo", "one\ntwo\n"},
+		{"single newline preserved", "one\ntwo\n", "one\ntwo\n"},
+		{"excess newlines trimmed to one", "one\ntwo\n\n\n", "one\ntwo\n"},
+		{"empty content becomes one newline", "", "\n"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			_, err := NewWriteTool(root).Execute(context.Background(), map[string]any{
+				"path": "f.txt", "content": tt.content,
+			})
+			require.NoError(t, err)
+
+			b, err := os.ReadFile(filepath.Join(root, "f.txt"))
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, string(b))
+		})
+	}
+}
+
+func TestWriteToolSchemaDocumentsNewlineNormalization(t *testing.T) {
+	desc := NewWriteTool("/w").Schema().Function.Description
+	assert.Contains(t, desc, "trailing newline",
+		"models must be told about the normalization so the extra byte is expected")
+}
