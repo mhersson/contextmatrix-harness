@@ -186,3 +186,11 @@ func TestBashToolBackgroundDaemonReturnsPromptly(t *testing.T) {
 		t.Fatal("Execute did not return; background daemon holding the pipe wedged Wait")
 	}
 }
+
+func TestBashSchemaNamesWorkspaceRoot(t *testing.T) {
+	tool := NewBashTool("/work/repo")
+
+	desc := tool.Schema().Function.Description
+	assert.Contains(t, desc, "/work/repo",
+		"the schema description must name the literal workspace root so models never guess the cwd")
+}

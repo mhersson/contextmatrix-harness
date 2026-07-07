@@ -52,8 +52,10 @@ func (t BashTool) Name() string { return "bash" }
 
 func (t BashTool) Schema() llm.Tool {
 	return llm.Tool{Type: "function", Function: llm.ToolFunction{
-		Name:        "bash",
-		Description: "Run a shell command in the workspace root and return combined stdout+stderr. Non-zero exits are returned as output, not as a hard failure.",
+		Name: "bash",
+		Description: fmt.Sprintf(
+			"Run a shell command in the workspace root (%s) and return combined stdout+stderr. Non-zero exits are returned as output, not as a hard failure.",
+			t.root),
 		Parameters: json.RawMessage(fmt.Sprintf(`{
 			"type":"object",
 			"properties":{

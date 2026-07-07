@@ -61,6 +61,16 @@ type Config struct {
 	History            []llm.Message       // prior conversation to seed before the initial task message; nil = unchanged behavior
 	Compaction         *Compaction         // nil = hard context_limit stop (v1 behavior); non-nil = in-window compaction
 	Interactive        bool                // true = unbounded turns; incapable/transport errors await next input instead of terminating (requires Inbox)
+	// WrapUpTurns, when > 0, injects WrapUpMessage as a synthetic user message
+	// exactly once, at the top of the turn whose start leaves WrapUpTurns turns
+	// remaining before MaxTurns. It arrives as the freshest message in context —
+	// far more effective against end-of-run dithering than a static instruction
+	// from the seed prompt. Ignored in Interactive mode (no turn cap) and when 0
+	// (byte-identical to prior behavior).
+	WrapUpTurns int
+	// WrapUpMessage is the synthetic user message WrapUpTurns injects. Empty
+	// uses a built-in default that names the remaining turn count.
+	WrapUpMessage string
 	// TaskImages, when non-empty, are attached to the initial user message as
 	// OpenAI image_url content parts (after the task text). nil = text-only,
 	// byte-identical to prior behavior.
@@ -162,6 +172,9 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 	// no tool calls are neutral and do not touch this counter.
 	unproductive := 0
 
+	// nudged guards the one-shot wrap-up injection.
+	nudged := false
+
 	// MaxTurns>0 per-exchange backstop in interactive mode is deferred;
 	// chat uses MaxTurns=0 (unbounded). Non-interactive behavior is byte-identical.
 	for cfg.Interactive || res.Turns < cfg.MaxTurns {
@@ -173,6 +186,20 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 		}
 
 		msgs = drainInbox(cfg, msgs, emit)
+
+		if !cfg.Interactive && cfg.WrapUpTurns > 0 && !nudged &&
+			cfg.MaxTurns-res.Turns == cfg.WrapUpTurns {
+			nudged = true
+
+			msg := cfg.WrapUpMessage
+			if msg == "" {
+				msg = fmt.Sprintf("You have %d turn(s) left. If the task is complete, reply with your final answer now and make no more tool calls.", cfg.WrapUpTurns)
+			}
+
+			msgs = append(msgs, llm.Message{Role: "user", Content: msg})
+
+			emit.Emit(events.StateChange, map[string]any{"event": "wrap_up_nudge", "turns_remaining": cfg.WrapUpTurns})
+		}
 
 		res.Turns++
 
