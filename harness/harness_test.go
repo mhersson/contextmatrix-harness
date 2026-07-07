@@ -310,6 +310,172 @@ func (b *bigTool) Execute(_ context.Context, _ map[string]any) (tools.Result, er
 	return tools.Result{Text: b.output}, nil
 }
 
+// finishTool is a Terminal test tool. A successful call ends the Run loop.
+// execErr, when non-nil, makes Execute fail so termination is NOT triggered.
+type finishTool struct {
+	execErr error
+	calls   int
+}
+
+func (f *finishTool) Name() string { return "finish" }
+
+func (f *finishTool) Schema() llm.Tool {
+	return llm.Tool{Type: "function", Function: llm.ToolFunction{Name: "finish"}}
+}
+
+func (f *finishTool) Execute(_ context.Context, _ map[string]any) (tools.Result, error) {
+	f.calls++
+
+	if f.execErr != nil {
+		return tools.Result{}, f.execErr
+	}
+
+	return tools.Result{Text: "acknowledged"}, nil
+}
+
+func (f *finishTool) Terminal() bool { return true }
+
+func TestRunTerminatingToolEndsRun(t *testing.T) {
+	reg := tools.NewRegistry(&finishTool{})
+
+	f := &fakeLLM{responses: []llm.Response{
+		{ToolCalls: []llm.ToolCall{toolCall("1", "finish", `{"commit_message":"ship it"}`)}},
+	}}
+
+	res, err := Run(context.Background(), f, reg, newEmitter(), "do it", Config{MaxTurns: 10})
+	require.NoError(t, err)
+
+	assert.True(t, res.Completed)
+	assert.Equal(t, "done", res.Reason)
+	assert.Equal(t, 1, res.Turns)
+	assert.JSONEq(t, `{"commit_message":"ship it"}`, string(res.CompletionArgs))
+}
+
+// countingTool records how many times Execute ran; used to assert batch
+// skip-after semantics around a terminating call.
+type countingTool struct {
+	name  string
+	calls int
+}
+
+func (c *countingTool) Name() string { return c.name }
+
+func (c *countingTool) Schema() llm.Tool {
+	return llm.Tool{Type: "function", Function: llm.ToolFunction{Name: c.name}}
+}
+
+func (c *countingTool) Execute(_ context.Context, _ map[string]any) (tools.Result, error) {
+	c.calls++
+
+	return tools.Result{Text: "ok"}, nil
+}
+
+func TestRunTerminatingToolEmptyArgsNormalized(t *testing.T) {
+	reg := tools.NewRegistry(&finishTool{})
+
+	f := &fakeLLM{responses: []llm.Response{
+		{ToolCalls: []llm.ToolCall{toolCall("1", "finish", "")}},
+	}}
+
+	res, err := Run(context.Background(), f, reg, newEmitter(), "do it", Config{MaxTurns: 10})
+	require.NoError(t, err)
+
+	assert.True(t, res.Completed)
+	assert.JSONEq(t, "{}", string(res.CompletionArgs))
+}
+
+func TestRunTerminatingToolBatchSkipsAfter(t *testing.T) {
+	before := &countingTool{name: "before"}
+	after := &countingTool{name: "after"}
+	fin := &finishTool{}
+	reg := tools.NewRegistry(before, fin, after)
+
+	f := &fakeLLM{responses: []llm.Response{
+		{ToolCalls: []llm.ToolCall{
+			toolCall("1", "before", `{}`),
+			toolCall("2", "finish", `{"commit_message":"x"}`),
+			toolCall("3", "after", `{}`),
+		}},
+	}}
+
+	res, err := Run(context.Background(), f, reg, newEmitter(), "do it", Config{MaxTurns: 10})
+	require.NoError(t, err)
+
+	assert.True(t, res.Completed)
+	assert.Equal(t, 1, before.calls, "calls before the terminating one execute")
+	assert.Equal(t, 1, fin.calls, "the terminating call executes")
+	assert.Equal(t, 0, after.calls, "calls after the terminating one are skipped")
+	assert.JSONEq(t, `{"commit_message":"x"}`, string(res.CompletionArgs), "surfaces the terminating call's args, not before/after")
+}
+
+func TestRunTerminatingToolExecuteErrorDoesNotTerminate(t *testing.T) {
+	reg := tools.NewRegistry(&finishTool{execErr: errors.New("boom")})
+
+	f := &fakeLLM{responses: []llm.Response{
+		{ToolCalls: []llm.ToolCall{toolCall("1", "finish", `{}`)}},
+		{Content: "gave up", FinishReason: "stop"},
+	}}
+
+	res, err := Run(context.Background(), f, reg, newEmitter(), "do it", Config{MaxTurns: 10})
+	require.NoError(t, err)
+
+	assert.Equal(t, 2, res.Turns, "an erroring terminating call does not stop the run")
+	assert.Nil(t, res.CompletionArgs)
+	assert.Equal(t, 1, res.ToolCallFailures)
+}
+
+func TestRunTerminatingToolParseErrorDoesNotTerminate(t *testing.T) {
+	reg := tools.NewRegistry(&finishTool{})
+
+	f := &fakeLLM{responses: []llm.Response{
+		{ToolCalls: []llm.ToolCall{toolCall("1", "finish", `{bad json`)}},
+		{Content: "gave up", FinishReason: "stop"},
+	}}
+
+	res, err := Run(context.Background(), f, reg, newEmitter(), "do it", Config{MaxTurns: 10})
+	require.NoError(t, err)
+
+	assert.Equal(t, 2, res.Turns, "an unparseable terminating call is repaired, not terminal")
+	assert.Nil(t, res.CompletionArgs)
+	assert.Equal(t, 1, res.RepairCount)
+}
+
+func TestRunOmissionLeavesCompletionArgsNil(t *testing.T) {
+	work := &countingTool{name: "work"}
+	reg := tools.NewRegistry(work)
+
+	f := &fakeLLM{responses: []llm.Response{
+		{ToolCalls: []llm.ToolCall{toolCall("1", "work", `{}`)}},
+		{Content: "all done", FinishReason: "stop"},
+	}}
+
+	res, err := Run(context.Background(), f, reg, newEmitter(), "do it", Config{MaxTurns: 10})
+	require.NoError(t, err)
+
+	assert.True(t, res.Completed)
+	assert.Equal(t, "done", res.Reason)
+	assert.Nil(t, res.CompletionArgs, "completion by omission surfaces no args")
+}
+
+func TestRunTerminatingToolHonoredInInteractive(t *testing.T) {
+	reg := tools.NewRegistry(&finishTool{})
+	inbox := &scriptedInbox{closeErr: ErrInboxClosed}
+
+	f := &fakeLLM{responses: []llm.Response{
+		{ToolCalls: []llm.ToolCall{toolCall("1", "finish", `{"commit_message":"x"}`)}},
+	}}
+
+	res, err := Run(context.Background(), f, reg, newEmitter(), "do it", Config{
+		Interactive: true,
+		Inbox:       inbox,
+	})
+	require.NoError(t, err)
+
+	assert.True(t, res.Completed)
+	assert.Equal(t, "done", res.Reason)
+	assert.JSONEq(t, `{"commit_message":"x"}`, string(res.CompletionArgs))
+}
+
 // capturingLLMSeq records all requests; scripted responses are returned in order.
 type capturingLLMSeq struct {
 	responses []llm.Response

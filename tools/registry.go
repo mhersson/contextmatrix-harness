@@ -23,6 +23,18 @@ type Tool interface {
 	Execute(ctx context.Context, args map[string]any) (Result, error)
 }
 
+// Terminal marks a tool whose successful execution ends the harness Run loop.
+// When a registered tool implements Terminal and Terminal() reports true, a
+// successful call to it stops Run that turn (Result.Completed, Reason "done")
+// and the call's arguments are surfaced on harness.Result.CompletionArgs. Tools
+// that do not implement Terminal are dispatched exactly as before. A
+// terminating call's Result.Images are not delivered — the run ends that
+// turn, so a Terminal tool should not return images expecting the model to
+// see them.
+type Terminal interface {
+	Terminal() bool
+}
+
 type Registry struct {
 	tools map[string]Tool
 	order []string

@@ -31,4 +31,28 @@ protocol, transport, and policy concerns — those belong in the consuming backe
 ## Entry points
 
 `harness.Run`, `harness.Config`, `harness.Inbox`, `harness.Result`,
-`events.Emitter`, `tools.Registry`, `tools.Tool`, `llm.LLM`, `llm.Catalog`.
+`events.Emitter`, `tools.Registry`, `tools.Tool`, `tools.Terminal`, `llm.LLM`,
+`llm.Catalog`.
+
+## Terminating tool
+
+By default `Run` ends when the model emits a turn with no tool calls. A consumer
+can instead let the model end the run with an explicit action: register a tool
+that implements `tools.Terminal`.
+
+```go
+type Terminal interface {
+	Terminal() bool
+}
+```
+
+A **successful** call to such a tool ends `Run` that turn with
+`Result.Completed = true`, `Result.Reason = "done"`, and the call's arguments on
+`Result.CompletionArgs` (a `json.RawMessage` the consumer unmarshals into its
+own type; empty arguments normalize to `{}`). Other tool calls in the same turn
+execute if they precede the terminating call and are skipped if they follow it.
+
+Termination gates on execution: a terminating tool that returns an error, or
+whose arguments fail to parse, does **not** end the run — the model receives the
+error and retries. If the model ends by omission instead, `CompletionArgs` is
+`nil`. A registry with no `Terminal` tool behaves exactly as before.
