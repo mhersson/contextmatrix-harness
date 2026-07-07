@@ -500,7 +500,9 @@ func TestEmittedContentIsRedacted(t *testing.T) {
 	f := &fakeLLM{responses: []llm.Response{
 		{Content: "leak SECRET here", Reasoning: "think SECRET", FinishReason: "stop"},
 	}}
+
 	var transcript bytes.Buffer
+
 	emit := events.NewEmitter(nil, &transcript)
 
 	_, err := Run(context.Background(), f, tools.NewRegistry(), emit, "task", Config{
@@ -525,7 +527,9 @@ func TestEmittedToolCallArgsAreRedacted(t *testing.T) {
 		{ToolCalls: []llm.ToolCall{toolCall("1", "read", `{"path":"f.txt","note":"SECRET"}`)}},
 		{Content: "done", FinishReason: "stop"},
 	}}
+
 	var transcript bytes.Buffer
+
 	emit := events.NewEmitter(nil, &transcript)
 
 	_, err := Run(context.Background(), f, reg, emit, "task", Config{
@@ -855,13 +859,16 @@ func (f *pushOnStreamLLM) Send(context.Context, llm.Request) (llm.Response, erro
 
 func (f *pushOnStreamLLM) SendStream(_ context.Context, req llm.Request, _ func(llm.Delta)) (llm.Response, error) {
 	f.requests = append(f.requests, req)
+
 	f.i++
 	if f.i == f.pushOnTurn {
 		f.inbox.push(f.msg)
 	}
+
 	if f.i-1 < len(f.responses) {
 		return f.responses[f.i-1], nil
 	}
+
 	return llm.Response{FinishReason: "stop"}, nil
 }
 
@@ -882,6 +889,7 @@ func TestIncapableRecoveryDeliversStashedInterjection(t *testing.T) {
 	reg := tools.NewRegistry(tools.NewReadTool(t.TempDir()))
 
 	var transcript bytes.Buffer
+
 	emit := events.NewEmitter(nil, &transcript)
 
 	res, err := Run(context.Background(), fake, reg, emit, "task", Config{
@@ -892,6 +900,7 @@ func TestIncapableRecoveryDeliversStashedInterjection(t *testing.T) {
 	require.NoError(t, err)
 
 	delivered := false
+
 	for _, ev := range parseEvents(t, transcript.String()) {
 		if ev.Kind == events.UserInput && ev.Data["message_id"] == "interject-1" {
 			delivered = true
@@ -1354,6 +1363,7 @@ func TestTransportErrorEmitIsRedactedAndCapped(t *testing.T) {
 	// ever sees the (now-fragmented) secret.
 	headFragment := secretHead[:headSurvive]
 	tailFragment := secretTail[len(secretTail)-tailSurvive:]
+
 	assert.NotContains(t, s, headFragment, "head-cut straddling secret fragment leaked: truncation ran before redaction")
 	assert.NotContains(t, s, tailFragment, "tail-cut straddling secret fragment leaked: truncation ran before redaction")
 

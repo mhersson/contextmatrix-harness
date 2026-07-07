@@ -194,3 +194,85 @@ func TestBashSchemaNamesWorkspaceRoot(t *testing.T) {
 	assert.Contains(t, desc, "/work/repo",
 		"the schema description must name the literal workspace root so models never guess the cwd")
 }
+
+func TestOptIntCoerced(t *testing.T) {
+	keys := []string{"timeout_seconds", "timeout"}
+
+	tests := []struct {
+		name    string
+		args    map[string]any
+		want    int
+		wantErr string
+	}{
+		{"absent returns default", map[string]any{"command": "x"}, 30, ""},
+		{"canonical key float64", map[string]any{"timeout_seconds": 5.0}, 5, ""},
+		{"alias key int", map[string]any{"timeout": 7}, 7, ""},
+		{"alias numeric string", map[string]any{"timeout": "12"}, 12, ""},
+		{"numeric string with whitespace", map[string]any{"timeout": " 9 "}, 9, ""},
+		{"non-numeric string", map[string]any{"timeout": "abc"}, 0, `"timeout"`},
+		{"unsupported type", map[string]any{"timeout": true}, 0, `"timeout"`},
+		{"both keys conflict", map[string]any{"timeout_seconds": 1, "timeout": 2}, 0, "timeout_seconds"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := optIntCoerced(tt.args, keys, 30)
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestBashTimeoutAliasDrivesTimeout(t *testing.T) {
+	// End to end: the alias spelling, as a numeric STRING, must control the
+	// real timeout instead of being silently dropped onto the default.
+	out, err := NewBashTool(t.TempDir()).Execute(context.Background(), map[string]any{
+		"command": "sleep 5",
+		"timeout": "1",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, out.Text, "timed out after 1s")
+}
+
+func TestBashTimeoutConflictingAliasesError(t *testing.T) {
+	_, err := NewBashTool(t.TempDir()).Execute(context.Background(), map[string]any{
+		"command":         "echo hi",
+		"timeout":         1,
+		"timeout_seconds": 2,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "timeout_seconds",
+		"the corrective error must name the canonical spelling")
+}
+
+func TestBashTimeoutNonNumericStringError(t *testing.T) {
+	_, err := NewBashTool(t.TempDir()).Execute(context.Background(), map[string]any{
+		"command": "echo hi",
+		"timeout": "abc",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `"timeout"`, "the error must name the offending key")
+	assert.Contains(t, err.Error(), "numeric string", "the error must name the accepted forms")
+}
+
+func TestBashUnknownExtraKeysStillIgnored(t *testing.T) {
+	out, err := NewBashTool(t.TempDir()).Execute(context.Background(), map[string]any{
+		"command":   "echo ok",
+		"unrelated": 42,
+	})
+	require.NoError(t, err)
+	assert.Contains(t, out.Text, "ok")
+}
+
+func TestBashSchemaDocumentsTimeoutAlias(t *testing.T) {
+	params := string(NewBashTool("/w").Schema().Function.Parameters)
+	assert.Contains(t, params, "alias", "schema must document the timeout alias")
+	assert.Contains(t, params, "numeric string", "schema must document string coercion")
+}

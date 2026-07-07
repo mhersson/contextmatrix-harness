@@ -30,6 +30,7 @@ type streamOptions struct {
 func encodeRequest(req Request, d Dialect) ([]byte, error) {
 	if d == DialectOpenAI {
 		req.ReasoningEffort = extractReasoningEffort(req.Reasoning)
+
 		req.Provider, req.Models, req.Reasoning, req.Usage = nil, nil, nil, nil
 		if req.Stream {
 			req.StreamOptions = &streamOptions{IncludeUsage: true}
@@ -53,6 +54,7 @@ func extractReasoningEffort(raw json.RawMessage) string {
 	var r struct {
 		Effort string `json:"effort"`
 	}
+
 	_ = json.Unmarshal(raw, &r) //nolint:errcheck // best-effort; "" on malformed
 
 	return r.Effort

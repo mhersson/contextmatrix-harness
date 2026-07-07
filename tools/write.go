@@ -20,7 +20,7 @@ func (t WriteTool) Name() string { return "write" }
 func (t WriteTool) Schema() llm.Tool {
 	return llm.Tool{Type: "function", Function: llm.ToolFunction{
 		Name:        "write",
-		Description: "Create or overwrite a file with exact content, returning a compact diff. Set create_dirs to make missing parent directories.",
+		Description: "Create or overwrite a file with exact content, returning a compact diff. Content is normalized to end with exactly one trailing newline. Set create_dirs to make missing parent directories.",
 		Parameters: json.RawMessage(`{
 			"type":"object",
 			"properties":{
@@ -43,6 +43,11 @@ func (t WriteTool) Execute(_ context.Context, args map[string]any) (Result, erro
 	if err != nil {
 		return Result{}, err
 	}
+
+	// Normalize to exactly one trailing newline BEFORE writing and summarizing:
+	// POSIX text files end with one, gofmt/goimports enforce it for Go, and
+	// models that omit it burn turns repairing. Documented in the description.
+	content = strings.TrimRight(content, "\n") + "\n"
 
 	createDirs := optBool(args, "create_dirs")
 
