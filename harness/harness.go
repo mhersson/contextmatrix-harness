@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/mhersson/contextmatrix-harness/events"
 	"github.com/mhersson/contextmatrix-harness/llm"
@@ -88,7 +89,8 @@ type Result struct {
 	ToolCallFailures int
 	RepairCount      int
 	ModelUsed        string
-	Output           string // final assistant text of the last turn
+	Output           string          // final assistant text of the last turn
+	CompletionArgs   json.RawMessage // terminating-tool call arguments; nil if the run ended by omission
 }
 
 // seedMessage builds the initial user message. With no images it is the plain
@@ -400,6 +402,12 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 		// domain failure, not a model incapability signal.
 		turnHadCapableTool := false
 
+		// terminated is set when a tools.Terminal tool executes successfully this
+		// turn; completionArgs carries that call's normalized arguments.
+		terminated := false
+
+		var completionArgs json.RawMessage
+
 		for i, tc := range resp.ToolCalls {
 			if interrupted {
 				msgs = append(msgs, toolResultMsg(tc.ID, "skipped: user interjected"))
@@ -466,7 +474,30 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 				turnImages = append(turnImages, out.Images...) // nil-safe; images delivered after the batch
 
 				emit.Emit(events.ToolResult, map[string]any{"id": tc.ID, "output_len": len(text)})
+
+				if term, isTerminal := tool.(tools.Terminal); isTerminal && term.Terminal() {
+					terminated = true
+
+					// Normalize like parseArgs (repair.go): empty args → "{}", so
+					// CompletionArgs is always valid JSON for the consumer.
+					raw := strings.TrimSpace(tc.Function.Arguments)
+					if raw == "" {
+						raw = "{}"
+					}
+
+					completionArgs = json.RawMessage(raw)
+				}
 			}()
+
+			if terminated {
+				res.Completed = true
+				res.Reason = "done"
+				res.CompletionArgs = completionArgs
+
+				emit.Emit(events.StateChange, map[string]any{"stop": "done", "turns": res.Turns, "via": "terminating_tool"})
+
+				return res, nil
+			}
 
 			// Drain mid-batch only if there are remaining calls to skip.
 			if cfg.Inbox != nil && i < len(resp.ToolCalls)-1 {
