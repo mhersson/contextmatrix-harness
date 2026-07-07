@@ -118,6 +118,7 @@ func parseStreamWithLimit(r io.Reader, onDelta func(Delta), maxLine int) (Respon
 			d := ch.Delta
 			if d.Content != "" {
 				contentBuilder.WriteString(d.Content)
+
 				if onDelta != nil {
 					onDelta(Delta{Content: d.Content})
 				}
@@ -125,6 +126,7 @@ func parseStreamWithLimit(r io.Reader, onDelta func(Delta), maxLine int) (Respon
 
 			if d.Reasoning != "" {
 				reasoningBuilder.WriteString(d.Reasoning)
+
 				if onDelta != nil {
 					onDelta(Delta{Reasoning: d.Reasoning})
 				}
