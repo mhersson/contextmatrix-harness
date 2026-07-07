@@ -405,6 +405,7 @@ func TestRunTerminatingToolBatchSkipsAfter(t *testing.T) {
 	assert.Equal(t, 1, before.calls, "calls before the terminating one execute")
 	assert.Equal(t, 1, fin.calls, "the terminating call executes")
 	assert.Equal(t, 0, after.calls, "calls after the terminating one are skipped")
+	assert.JSONEq(t, `{"commit_message":"x"}`, string(res.CompletionArgs), "surfaces the terminating call's args, not before/after")
 }
 
 func TestRunTerminatingToolExecuteErrorDoesNotTerminate(t *testing.T) {

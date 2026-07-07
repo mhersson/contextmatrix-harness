@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/mhersson/contextmatrix-harness/events"
 	"github.com/mhersson/contextmatrix-harness/llm"
@@ -477,15 +476,7 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 
 				if term, isTerminal := tool.(tools.Terminal); isTerminal && term.Terminal() {
 					terminated = true
-
-					// Normalize like parseArgs (repair.go): empty args → "{}", so
-					// CompletionArgs is always valid JSON for the consumer.
-					raw := strings.TrimSpace(tc.Function.Arguments)
-					if raw == "" {
-						raw = "{}"
-					}
-
-					completionArgs = json.RawMessage(raw)
+					completionArgs = json.RawMessage(normalizeArgs(tc.Function.Arguments))
 				}
 			}()
 

@@ -27,7 +27,10 @@ type Tool interface {
 // When a registered tool implements Terminal and Terminal() reports true, a
 // successful call to it stops Run that turn (Result.Completed, Reason "done")
 // and the call's arguments are surfaced on harness.Result.CompletionArgs. Tools
-// that do not implement Terminal are dispatched exactly as before.
+// that do not implement Terminal are dispatched exactly as before. A
+// terminating call's Result.Images are not delivered — the run ends that
+// turn, so a Terminal tool should not return images expecting the model to
+// see them.
 type Terminal interface {
 	Terminal() bool
 }
