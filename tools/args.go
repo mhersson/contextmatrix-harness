@@ -2,6 +2,7 @@ package tools
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -44,6 +45,48 @@ func optInt(args map[string]any, key string, def int) int {
 		return v
 	default:
 		return def
+	}
+}
+
+// optIntCoerced returns the int value of the first key among keys present in
+// args, coercing float64, int, or a numeric string (models routinely send
+// `"30"` for numeric parameters). Absent keys return def. More than one key
+// present, a non-numeric string, or an unsupported type is a corrective error
+// the model can act on — silently falling back to the default is exactly the
+// failure this helper exists to prevent. keys[0] is the canonical spelling.
+func optIntCoerced(args map[string]any, keys []string, def int) (int, error) {
+	var found []string
+
+	for _, k := range keys {
+		if _, ok := args[k]; ok {
+			found = append(found, k)
+		}
+	}
+
+	if len(found) == 0 {
+		return def, nil
+	}
+
+	if len(found) > 1 {
+		return 0, fmt.Errorf("use exactly one of %v; %q is the canonical spelling", found, keys[0])
+	}
+
+	key := found[0]
+
+	switch v := args[key].(type) {
+	case float64:
+		return int(v), nil
+	case int:
+		return v, nil
+	case string:
+		n, err := strconv.Atoi(strings.TrimSpace(v))
+		if err != nil {
+			return 0, fmt.Errorf("argument %q must be an integer or a numeric string (e.g. 30 or \"30\"), got %q", key, v)
+		}
+
+		return n, nil
+	default:
+		return 0, fmt.Errorf("argument %q must be an integer or a numeric string (e.g. 30 or \"30\"), got %T", key, v)
 	}
 }
 

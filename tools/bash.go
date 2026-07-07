@@ -60,7 +60,7 @@ func (t BashTool) Schema() llm.Tool {
 			"type":"object",
 			"properties":{
 				"command":{"type":"string","description":"the shell command to run"},
-				"timeout_seconds":{"type":"integer","description":"optional timeout in seconds (default 30, max %d)"}
+				"timeout_seconds":{"type":"integer","description":"optional timeout in seconds (default 30, max %d); \"timeout\" is accepted as an alias; numeric strings are coerced"}
 			},
 			"required":["command"]
 		}`, t.maxTimeout)),
@@ -73,7 +73,10 @@ func (t BashTool) Execute(ctx context.Context, args map[string]any) (Result, err
 		return Result{}, err
 	}
 
-	timeout := optInt(args, "timeout_seconds", 30)
+	timeout, err := optIntCoerced(args, []string{"timeout_seconds", "timeout"}, 30)
+	if err != nil {
+		return Result{}, err
+	}
 
 	if timeout < 1 {
 		timeout = 1
