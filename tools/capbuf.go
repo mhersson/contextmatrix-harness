@@ -26,10 +26,7 @@ func (w *capWriter) Write(p []byte) (int, error) {
 		return len(p), nil
 	}
 
-	room := w.limit - w.buf.Len()
-	if room < 0 {
-		room = 0
-	}
+	room := max(w.limit-w.buf.Len(), 0)
 
 	if room >= len(p) {
 		w.buf.Write(p)

@@ -218,7 +218,7 @@ func assertWellPaired(t *testing.T, msgs []llm.Message) {
 		if m.Role == "tool" {
 			var owned bool
 
-			for j := 0; j < i; j++ {
+			for j := range i {
 				for _, tc := range msgs[j].ToolCalls {
 					if tc.ID == m.ToolCallID {
 						owned = true

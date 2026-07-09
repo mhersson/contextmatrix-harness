@@ -166,7 +166,7 @@ func TestRunMaxTurnsZeroUsesDefault(t *testing.T) {
 	resp := llm.Response{ToolCalls: []llm.ToolCall{toolCall("1", "read", `{"path":"missing"}`)}}
 
 	many := make([]llm.Response, 0, defaultMaxTurns)
-	for i := 0; i < defaultMaxTurns; i++ {
+	for range defaultMaxTurns {
 		many = append(many, resp)
 	}
 
@@ -769,7 +769,7 @@ func parseEvents(t *testing.T, transcript string) []events.Event {
 
 	var out []events.Event
 
-	for _, line := range strings.Split(strings.TrimSpace(transcript), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(transcript), "\n") {
 		if line == "" {
 			continue
 		}

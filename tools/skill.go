@@ -217,7 +217,7 @@ func parseSkillDescription(data []byte) (string, bool) {
 
 	inFrontmatter := false
 
-	for _, line := range strings.Split(rest, "\n") {
+	for line := range strings.SplitSeq(rest, "\n") {
 		line = strings.TrimRight(line, "\r")
 
 		if !inFrontmatter {

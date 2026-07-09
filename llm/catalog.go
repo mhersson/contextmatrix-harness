@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 )
 
@@ -19,13 +20,7 @@ type CatalogEntry struct {
 }
 
 func (e CatalogEntry) SupportsTools() bool {
-	for _, p := range e.SupportedParameters {
-		if p == "tools" {
-			return true
-		}
-	}
-
-	return false
+	return slices.Contains(e.SupportedParameters, "tools")
 }
 
 type Catalog []CatalogEntry
@@ -101,12 +96,8 @@ func parseCatalogOpenAI(r io.Reader) (Catalog, error) {
 
 		var params []string
 
-		for _, f := range d.Capabilities.Features {
-			if f == "tools" {
-				params = []string{"tools"}
-
-				break
-			}
+		if slices.Contains(d.Capabilities.Features, "tools") {
+			params = []string{"tools"}
 		}
 
 		out = append(out, CatalogEntry{

@@ -103,7 +103,7 @@ func (c *Client) doWithRetry(ctx context.Context, req Request) (*http.Response, 
 		lastErr  error
 	)
 
-	for attempt := 0; attempt < attempts; attempt++ {
+	for attempt := range attempts {
 		if attempt > 0 {
 			if err := c.sleep(ctx, c.backoff(attempt, lastResp)); err != nil {
 				return nil, err

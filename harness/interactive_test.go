@@ -54,7 +54,7 @@ func TestInteractiveUnbounded(t *testing.T) {
 	// Script scriptedTurns tool calls (with a missing path so the tool errors
 	// but the loop continues), then one no-tool-call response.
 	responses := make([]llm.Response, scriptedTurns+1)
-	for i := 0; i < scriptedTurns; i++ {
+	for i := range scriptedTurns {
 		responses[i] = llm.Response{
 			ToolCalls: []llm.ToolCall{toolCall("1", "read", `{"path":"missing"}`)},
 		}

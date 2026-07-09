@@ -452,7 +452,7 @@ func TestFilterGlobStreamNoTruncation(t *testing.T) {
 		want []string
 	)
 
-	for i := 0; i < totalLines; i++ {
+	for i := range totalLines {
 		ext := "txt"
 		if i%2 == 0 {
 			ext = "go"
