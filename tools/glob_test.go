@@ -209,8 +209,8 @@ func TestGlobToolPathScoped(t *testing.T) {
 // TestGlobToolSchemaDocumentsMatchDialect pins the Round-3 Minor fix: models
 // otherwise default to shell-glob assumptions (e.g. brace expansion), but
 // filepath.Match treats "{" and "}" as ordinary literal characters, so
-// "*.{go,ts}" silently matches nothing -- the same wasted-turn failure mode
-// this card's parent (CTXHNS-006) fixed for directory-relative patterns.
+// "*.{md,txt}" silently matches nothing -- the same wasted-turn failure mode
+// fixed for directory-relative patterns.
 func TestGlobToolSchemaDocumentsMatchDialect(t *testing.T) {
 	schema := NewGlobTool("/w").Schema().Function
 	assert.Contains(t, schema.Description, "filepath.Match")

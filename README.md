@@ -27,6 +27,10 @@ This module is consumed by both backends in the ContextMatrix ecosystem:
 whole has **zero external module dependencies**. Both rules are enforced in CI by
 `scripts/deps-gate.sh` (`make deps-gate`). Keep the loop free of orchestration,
 protocol, transport, and policy concerns — those belong in the consuming backend.
+The harness is likewise language-neutral toward the target workspace: it bakes in
+no target-language tools, prompts, or defaults — toolchain specifics enter only
+from the caller through its seams (system prompt, verify check, bash env, skills
+mount, tool set).
 
 ## Entry points
 

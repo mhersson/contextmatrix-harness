@@ -25,7 +25,7 @@ func (t GrepTool) Schema() llm.Tool {
 			"properties":{
 				"pattern":{"type":"string","description":"regular expression to search for"},
 				"path":{"type":"string","description":"optional subpath under the workspace root to search"},
-				"glob":{"type":"string","description":"optional file glob filter, e.g. *.go"}
+				"glob":{"type":"string","description":"optional file glob filter, e.g. *.md"}
 			},
 			"required":["pattern"]
 		}`),

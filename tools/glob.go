@@ -48,11 +48,11 @@ func (t GlobTool) Name() string { return "glob" }
 func (t GlobTool) Schema() llm.Tool {
 	return llm.Tool{Type: "function", Function: llm.ToolFunction{
 		Name:        "glob",
-		Description: "List files matching a glob pattern, honoring .gitignore. Pattern matches the file's path relative to the search root, with a leading **/ implied: tools/*.go matches a tools/ directory at any depth; ** matches zero or more path segments, so */*.go matches any depth of one or more directories, not just one level; an empty pattern matches every file. Uses Go's filepath.Match glob syntax (*, ?, [...]), not shell glob -- e.g. *.{go,ts} brace expansion is literal and matches nothing. Optionally restrict to a subpath.",
+		Description: "List files matching a glob pattern, honoring .gitignore. Pattern matches the file's path relative to the search root, with a leading **/ implied: docs/*.md matches a docs/ directory at any depth; ** matches zero or more path segments, so */*.md matches any depth of one or more directories, not just one level; an empty pattern matches every file. Uses Go's filepath.Match glob syntax (*, ?, [...]), not shell glob -- e.g. *.{md,txt} brace expansion is literal and matches nothing. Optionally restrict to a subpath.",
 		Parameters: json.RawMessage(`{
 			"type":"object",
 			"properties":{
-				"pattern":{"type":"string","description":"glob pattern matched against the path relative to the search root, with a leading **/ implied -- tools/*.go matches a tools/ directory at any depth, ** matches zero or more path segments (so */*.go matches any depth of one or more, not just one level), e.g. *.go, tools/*.go, or tools/**/*.go; an empty pattern matches every file; uses Go's filepath.Match syntax (*, ?, [...]), not shell glob, so *.{go,ts} brace expansion is literal and matches nothing"},
+				"pattern":{"type":"string","description":"glob pattern matched against the path relative to the search root, with a leading **/ implied -- docs/*.md matches a docs/ directory at any depth, ** matches zero or more path segments (so */*.md matches any depth of one or more, not just one level), e.g. *.md, docs/*.md, or docs/**/*.md; an empty pattern matches every file; uses Go's filepath.Match syntax (*, ?, [...]), not shell glob, so *.{md,txt} brace expansion is literal and matches nothing"},
 				"path":{"type":"string","description":"optional subpath under the workspace root to search"}
 			},
 			"required":["pattern"]

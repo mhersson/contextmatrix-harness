@@ -37,6 +37,14 @@ Orchestration, protocol, transport, and policy belong in the consuming backends
 
 - **The loop is FSM-free.** `harness.Run` drives turns and knows nothing about
   tasks, cards, or chat. Consumers own the state machine.
+- **Language-neutral toward the target workspace.** The harness bakes in no
+  target-language behavior — no language-specific tools, prompts, defaults, or
+  file-type special cases. Toolchain and language specifics enter only from the
+  caller through the existing seams: `Config.SystemPrompt` (`harness/harness.go`),
+  the verify `Check` callback (`harness/verify.go`), `BashTool.WithExtraEnv`
+  (`tools/bash.go`), the caller-mounted skills directory (`NewSkillTool`,
+  `tools/skill.go`), and tool-set composition (`tools.ReadOnlyTools`,
+  `tools/readonly.go`).
 - **Terminating tool.** `Run` ends on a turn with no tool calls, *or* when a tool
   implementing `tools.Terminal` succeeds — then `Result.Completed`, `Reason
   "done"`, and the call args on `Result.CompletionArgs`. Termination gates on
