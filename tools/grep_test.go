@@ -2,9 +2,11 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -41,4 +43,24 @@ func TestGrepToolDashPattern(t *testing.T) {
 	out, err := NewGrepTool(root).Execute(context.Background(), map[string]any{"pattern": "-b"})
 	require.NoError(t, err)
 	assert.Contains(t, out.Text, "a-b-c")
+}
+
+func TestGrepCapsOutputLines(t *testing.T) {
+	root := t.TempDir()
+
+	var b strings.Builder
+	for i := range 300 {
+		fmt.Fprintf(&b, "needle line %d\n", i)
+	}
+
+	require.NoError(t, os.WriteFile(filepath.Join(root, "big.txt"), []byte(b.String()), 0o644))
+
+	g := NewGrepTool(root)
+	res, err := g.Execute(context.Background(), map[string]any{"pattern": "needle"})
+	require.NoError(t, err)
+
+	lines := strings.Split(strings.TrimRight(res.Text, "\n"), "\n")
+	require.Len(t, lines, grepMaxLines+1, "200 match lines + 1 truncation note")
+	assert.Contains(t, lines[len(lines)-1], "100 more matching lines")
+	assert.Contains(t, lines[len(lines)-1], "narrow the pattern")
 }
