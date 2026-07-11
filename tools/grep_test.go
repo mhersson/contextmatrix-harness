@@ -46,6 +46,10 @@ func TestGrepToolDashPattern(t *testing.T) {
 }
 
 func TestGrepCapsOutputLines(t *testing.T) {
+	if _, err := exec.LookPath("rg"); err != nil {
+		t.Skip("ripgrep (rg) not installed")
+	}
+
 	root := t.TempDir()
 
 	var b strings.Builder
