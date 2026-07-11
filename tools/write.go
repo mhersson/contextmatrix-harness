@@ -20,13 +20,12 @@ func (t WriteTool) Name() string { return "write" }
 func (t WriteTool) Schema() llm.Tool {
 	return llm.Tool{Type: "function", Function: llm.ToolFunction{
 		Name:        "write",
-		Description: "Create or overwrite a file with exact content, returning a compact diff. Content is normalized to end with exactly one trailing newline. Set create_dirs to make missing parent directories.",
+		Description: "Create or overwrite a file with exact content, returning a compact diff. Content is normalized to end with exactly one trailing newline. Missing parent directories are created automatically.",
 		Parameters: json.RawMessage(`{
 			"type":"object",
 			"properties":{
 				"path":{"type":"string","description":"file path relative to the workspace root"},
-				"content":{"type":"string","description":"the full new file content"},
-				"create_dirs":{"type":"boolean","description":"optional; create missing parent directories"}
+				"content":{"type":"string","description":"the full new file content"}
 			},
 			"required":["path","content"]
 		}`),
@@ -49,8 +48,6 @@ func (t WriteTool) Execute(_ context.Context, args map[string]any) (Result, erro
 	// models that omit it burn turns repairing. Documented in the description.
 	content = strings.TrimRight(content, "\n") + "\n"
 
-	createDirs := optBool(args, "create_dirs")
-
 	abs, err := resolveInRoot(t.root, rel)
 	if err != nil {
 		return Result{}, err
@@ -59,10 +56,10 @@ func (t WriteTool) Execute(_ context.Context, args map[string]any) (Result, erro
 	old, readErr := os.ReadFile(abs)
 	existed := readErr == nil
 
-	if createDirs {
-		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
-			return Result{}, fmt.Errorf("create parent dirs: %w", err)
-		}
+	// The path is jailed by resolveInRoot above, so creating parents is safe —
+	// and a missing parent otherwise costs the model turns on bash mkdir.
+	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+		return Result{}, fmt.Errorf("create parent dirs: %w", err)
 	}
 
 	if err := os.WriteFile(abs, []byte(content), 0o644); err != nil {
