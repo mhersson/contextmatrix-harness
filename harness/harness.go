@@ -71,6 +71,13 @@ type Config struct {
 	// WrapUpMessage is the synthetic user message WrapUpTurns injects. Empty
 	// uses a built-in default that names the remaining turn count.
 	WrapUpMessage string
+	// GraceTurn, when true, grants ONE extra model call after MaxTurns is
+	// exhausted (non-Interactive only), offering ONLY the registry's Terminal
+	// tools plus a synthetic user message demanding the terminal call. A model
+	// whose work is done but that never spent a turn on the terminal tool can
+	// still land it; any other response stops as max_turns exactly as before.
+	// The grace call's usage is accounted; res.Turns is not incremented.
+	GraceTurn bool
 	// TaskImages, when non-empty, are attached to the initial user message as
 	// OpenAI image_url content parts (after the task text). nil = text-only,
 	// byte-identical to prior behavior.
@@ -578,6 +585,12 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 		for _, um := range pendingMsgs {
 			emit.Emit(events.UserInput, map[string]any{"message_id": um.MessageID, "content_len": len(um.Content)})
 			msgs = append(msgs, llm.Message{Role: "user", Content: um.Content})
+		}
+	}
+
+	if cfg.GraceTurn && !cfg.Interactive {
+		if graceFinish(ctx, client, reg, emit, cfg, msgs, &res) {
+			return res, nil
 		}
 	}
 
