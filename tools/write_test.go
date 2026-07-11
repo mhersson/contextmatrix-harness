@@ -36,10 +36,11 @@ func TestWriteToolCreateDirs(t *testing.T) {
 	assert.FileExists(t, filepath.Join(root, "sub/dir/f.txt"))
 }
 
-func TestWriteToolMissingDirWithoutCreateDirs(t *testing.T) {
+func TestWriteToolCreatesMissingDirWithoutCreateDirs(t *testing.T) {
 	root := t.TempDir()
 	_, err := NewWriteTool(root).Execute(context.Background(), map[string]any{"path": "no/such/f.txt", "content": "x"})
-	require.Error(t, err)
+	require.NoError(t, err)
+	assert.FileExists(t, filepath.Join(root, "no/such/f.txt"))
 }
 
 func TestWriteToolRequiresPathAndContent(t *testing.T) {
@@ -81,4 +82,20 @@ func TestWriteToolSchemaDocumentsNewlineNormalization(t *testing.T) {
 	desc := NewWriteTool("/w").Schema().Function.Description
 	assert.Contains(t, desc, "trailing newline",
 		"models must be told about the normalization so the extra byte is expected")
+}
+
+func TestWriteCreatesParentDirs(t *testing.T) {
+	root := t.TempDir()
+	w := NewWriteTool(root)
+
+	res, err := w.Execute(context.Background(), map[string]any{
+		"path":    "internal/deep/nested/file.go",
+		"content": "package nested",
+	})
+	require.NoError(t, err, "write must create missing parent directories without create_dirs")
+	assert.NotEmpty(t, res.Text)
+
+	got, err := os.ReadFile(filepath.Join(root, "internal/deep/nested/file.go"))
+	require.NoError(t, err)
+	assert.Equal(t, "package nested\n", string(got))
 }

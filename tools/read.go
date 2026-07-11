@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"strings"
 
@@ -70,6 +71,10 @@ func (t ReadTool) Execute(_ context.Context, args map[string]any) (Result, error
 
 	f, err := os.Open(abs)
 	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return Result{}, fmt.Errorf("read %s: file does not exist — use glob to list existing paths (an empty pattern lists every file)", rel)
+		}
+
 		return Result{}, fmt.Errorf("read %s: %w", rel, err)
 	}
 	defer f.Close()

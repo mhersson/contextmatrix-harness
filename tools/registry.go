@@ -67,3 +67,15 @@ func (r *Registry) Schemas() []llm.Tool {
 
 	return out
 }
+
+// All returns the registry's tools in insertion order. It mirrors Schemas but
+// yields the Tool values themselves, so callers that must inspect a tool's
+// interfaces (e.g. Terminal) can enumerate the registered set.
+func (r *Registry) All() []Tool {
+	out := make([]Tool, 0, len(r.order))
+	for _, name := range r.order {
+		out = append(out, r.tools[name])
+	}
+
+	return out
+}
