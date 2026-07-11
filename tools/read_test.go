@@ -194,6 +194,14 @@ func TestReadToolHugeLimitDoesNotEmpty(t *testing.T) {
 	assert.Equal(t, "a\nb\nc\nd\n", out.Text)
 }
 
+func TestReadNotFoundGuidesModel(t *testing.T) {
+	r := NewReadTool(t.TempDir())
+	_, err := r.Execute(context.Background(), map[string]any{"path": "go.mod"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "does not exist")
+	assert.Contains(t, err.Error(), "glob")
+}
+
 func TestReadRejectsOversizeTextFile(t *testing.T) {
 	dir := t.TempDir()
 	big := filepath.Join(dir, "big.txt")
