@@ -99,7 +99,7 @@ type Result struct {
 	CompletionArgs   json.RawMessage // terminating-tool call arguments; nil if the run ended by omission
 	// Messages is the full in-memory conversation at stop time: system
 	// prompt, seeded History, the task message, and every turn's assistant
-	// and tool messages. Callers that run a model in rounds (co-op seats)
+	// and tool messages. Callers that run a model in rounds (mob seats)
 	// feed it back as Config.History to continue with full tool-call
 	// fidelity instead of a text-only transcript.
 	Messages []llm.Message
