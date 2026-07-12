@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1542,4 +1543,59 @@ func TestTransportErrorEmitIsRedactedAndCapped(t *testing.T) {
 		require.True(t, ok, "error event must carry a string error")
 		assert.LessOrEqual(t, len(errStr), maxBytes+80, "error event must be bounded by the cap") // marker allowance
 	}
+}
+
+// doneLLM answers every call with one no-tool-call assistant turn.
+type doneLLM struct{ content string }
+
+func (d *doneLLM) Send(_ context.Context, _ llm.Request) (llm.Response, error) {
+	return llm.Response{Content: d.content, FinishReason: "stop"}, nil
+}
+
+func (d *doneLLM) SendStream(_ context.Context, _ llm.Request, _ func(llm.Delta)) (llm.Response, error) {
+	return llm.Response{Content: d.content, FinishReason: "stop"}, nil
+}
+
+func TestRunExportsMessages(t *testing.T) {
+	res, err := Run(t.Context(), &doneLLM{content: "final answer"}, tools.NewRegistry(),
+		events.NewEmitter(io.Discard, io.Discard), "do the thing", Config{
+			SystemPrompt: "sys",
+			MaxTurns:     3,
+			History: []llm.Message{
+				{Role: "user", Content: "earlier"},
+				{Role: "assistant", Content: "noted"},
+			},
+		})
+	require.NoError(t, err)
+	require.Equal(t, "done", res.Reason)
+
+	// system + 2 history + task seed + final assistant reply
+	require.Len(t, res.Messages, 5)
+	assert.Equal(t, "system", res.Messages[0].Role)
+	assert.Equal(t, "sys", res.Messages[0].Content)
+	assert.Equal(t, "do the thing", res.Messages[3].Content)
+	assert.Equal(t, "assistant", res.Messages[4].Role)
+	assert.Equal(t, "final answer", res.Messages[4].Content)
+}
+
+// toolBurnLLM always tool-calls, so a bounded run stops at max_turns.
+type toolBurnLLM struct{}
+
+func (toolBurnLLM) Send(_ context.Context, _ llm.Request) (llm.Response, error) {
+	return llm.Response{FinishReason: "tool_calls", ToolCalls: []llm.ToolCall{{
+		ID: "c1", Type: "function",
+		Function: llm.FunctionCall{Name: "nope", Arguments: "{}"},
+	}}}, nil
+}
+
+func (toolBurnLLM) SendStream(_ context.Context, _ llm.Request, _ func(llm.Delta)) (llm.Response, error) {
+	return toolBurnLLM{}.Send(nil, llm.Request{}) //nolint:staticcheck // ctx unused
+}
+
+func TestRunExportsMessagesOnMaxTurns(t *testing.T) {
+	res, err := Run(t.Context(), toolBurnLLM{}, tools.NewRegistry(),
+		events.NewEmitter(io.Discard, io.Discard), "task", Config{MaxTurns: 2})
+	require.NoError(t, err)
+	require.Equal(t, "max_turns", res.Reason)
+	assert.NotEmpty(t, res.Messages, "messages must be exported on budget stops too")
 }

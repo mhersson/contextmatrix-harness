@@ -97,6 +97,12 @@ type Result struct {
 	ModelUsed        string
 	Output           string          // final assistant text of the last turn
 	CompletionArgs   json.RawMessage // terminating-tool call arguments; nil if the run ended by omission
+	// Messages is the full in-memory conversation at stop time: system
+	// prompt, seeded History, the task message, and every turn's assistant
+	// and tool messages. Callers that run a model in rounds (co-op seats)
+	// feed it back as Config.History to continue with full tool-call
+	// fidelity instead of a text-only transcript.
+	Messages []llm.Message
 }
 
 // seedMessage builds the initial user message. With no images it is the plain
@@ -153,11 +159,10 @@ func redactStr(cfg Config, s string) string {
 
 // Run drives the bare agent loop: model call → tool dispatch → repeat, until the
 // model emits no tool calls (done) or a cap trips. FSM-free; no orchestration.
-func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.Emitter, task string, cfg Config) (Result, error) {
-	var (
-		res  Result
-		msgs []llm.Message
-	)
+func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.Emitter, task string, cfg Config) (res Result, err error) {
+	var msgs []llm.Message
+
+	defer func() { res.Messages = msgs }()
 
 	if cfg.Interactive && cfg.Inbox == nil {
 		return res, errors.New("harness: Interactive mode requires a non-nil Inbox")
