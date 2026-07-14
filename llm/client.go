@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"time"
 )
@@ -47,49 +48,121 @@ func (c *Client) SendStream(ctx context.Context, req Request, onDelta func(Delta
 	req.Stream = true
 	req.Usage = &UsageOpt{Include: true}
 
-	hr, err := c.doWithRetry(ctx, req)
-	if err != nil {
-		return Response{}, err
-	}
-	defer hr.Body.Close() //nolint:errcheck
+	attempts := c.retry.MaxRetries + 1
 
-	if hr.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(hr.Body, maxResponseBody+1))
-		if len(body) > maxResponseBody {
-			return Response{}, fmt.Errorf("response body exceeds %d bytes", maxResponseBody)
+	var lastErr error
+
+	// Stream-phase retry: doWithRetry covers connect-time failures, but a
+	// stream that opened cleanly can still die mid-read (in-band error
+	// frames — gateway idle timeouts — transport resets, decode errors).
+	// The request is stateless, so each attempt re-sends it whole; deltas
+	// already delivered from a failed attempt may repeat, which callers
+	// accept as cosmetic. ctx errors are never retried.
+	for attempt := range attempts {
+		if attempt > 0 {
+			slog.Warn("llm: stream failed; retrying", "attempt", attempt, "error", lastErr)
+
+			if err := c.sleep(ctx, c.backoff(attempt, nil)); err != nil {
+				return Response{}, err
+			}
 		}
 
-		return Response{}, fmt.Errorf("llm endpoint status %d: %s", hr.StatusCode, string(body))
+		hr, err := c.doWithRetry(ctx, req)
+		if err != nil {
+			// The connect-phase budget is already spent; do not multiply it.
+			return Response{}, err
+		}
+
+		if hr.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(io.LimitReader(hr.Body, maxResponseBody+1))
+			_ = hr.Body.Close() //nolint:errcheck
+
+			if len(body) > maxResponseBody {
+				return Response{}, fmt.Errorf("response body exceeds %d bytes", maxResponseBody)
+			}
+
+			return Response{}, fmt.Errorf("llm endpoint status %d: %s", hr.StatusCode, string(body))
+		}
+
+		resp, perr := parseStream(hr.Body, onDelta)
+		_ = hr.Body.Close() //nolint:errcheck
+
+		if perr == nil {
+			return resp, nil
+		}
+
+		if ctx.Err() != nil {
+			return Response{}, perr
+		}
+
+		lastErr = perr
 	}
 
-	return parseStream(hr.Body, onDelta)
+	return Response{}, lastErr
 }
 
 func (c *Client) Send(ctx context.Context, req Request) (Response, error) {
 	req.Stream = false
 	req.Usage = &UsageOpt{Include: true}
 
-	hr, err := c.doWithRetry(ctx, req)
-	if err != nil {
-		return Response{}, err
-	}
-	defer hr.Body.Close() //nolint:errcheck
+	attempts := c.retry.MaxRetries + 1
 
-	body, _ := io.ReadAll(io.LimitReader(hr.Body, maxResponseBody+1))
-	if len(body) > maxResponseBody {
-		return Response{}, fmt.Errorf("response body exceeds %d bytes", maxResponseBody)
+	var lastErr error
+
+	// Same stream-phase contract as SendStream: read/decode failures after
+	// a clean 200 are transient endpoint hiccups and retry on the same
+	// budget; non-OK statuses stay terminal (doWithRetry already retried
+	// the retryable ones).
+	for attempt := range attempts {
+		if attempt > 0 {
+			slog.Warn("llm: response read failed; retrying", "attempt", attempt, "error", lastErr)
+
+			if err := c.sleep(ctx, c.backoff(attempt, nil)); err != nil {
+				return Response{}, err
+			}
+		}
+
+		hr, err := c.doWithRetry(ctx, req)
+		if err != nil {
+			return Response{}, err
+		}
+
+		body, rerr := io.ReadAll(io.LimitReader(hr.Body, maxResponseBody+1))
+		_ = hr.Body.Close() //nolint:errcheck
+
+		if rerr != nil {
+			if ctx.Err() != nil {
+				return Response{}, fmt.Errorf("read response: %w", rerr)
+			}
+
+			lastErr = fmt.Errorf("read response: %w", rerr)
+
+			continue
+		}
+
+		if len(body) > maxResponseBody {
+			return Response{}, fmt.Errorf("response body exceeds %d bytes", maxResponseBody)
+		}
+
+		if hr.StatusCode != http.StatusOK {
+			return Response{}, fmt.Errorf("llm endpoint status %d: %s", hr.StatusCode, string(body))
+		}
+
+		var nr nonStreamResponse
+		if err := json.Unmarshal(body, &nr); err != nil {
+			if ctx.Err() != nil {
+				return Response{}, fmt.Errorf("decode response: %w", err)
+			}
+
+			lastErr = fmt.Errorf("decode response: %w", err)
+
+			continue
+		}
+
+		return normalizeHarmony(nr.toResponse()), nil
 	}
 
-	if hr.StatusCode != http.StatusOK {
-		return Response{}, fmt.Errorf("llm endpoint status %d: %s", hr.StatusCode, string(body))
-	}
-
-	var nr nonStreamResponse
-	if err := json.Unmarshal(body, &nr); err != nil {
-		return Response{}, fmt.Errorf("decode response: %w", err)
-	}
-
-	return normalizeHarmony(nr.toResponse()), nil
+	return Response{}, lastErr
 }
 
 // doWithRetry issues the request, retrying transport errors and retryable

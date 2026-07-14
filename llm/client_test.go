@@ -6,7 +6,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -160,4 +162,109 @@ func TestSendCapsOversizeBody(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "ok", resp.Content)
 	})
+}
+
+func TestSendStreamRetriesMidStreamErrorFrame(t *testing.T) {
+	var requests atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := requests.Add(1)
+
+		w.Header().Set("Content-Type", "text/event-stream")
+
+		if n == 1 {
+			io.WriteString(w, "data: {\"error\":{\"message\":\"Upstream idle timeout exceeded\"}}\n") //nolint:errcheck
+
+			return
+		}
+
+		io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\ndata: [DONE]\n") //nolint:errcheck
+	}))
+	defer srv.Close()
+
+	c := NewClient("k", WithBaseURL(srv.URL),
+		WithRetry(RetryPolicy{MaxRetries: 2, BaseDelay: time.Millisecond}))
+
+	resp, err := c.SendStream(context.Background(), Request{Model: "m"}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "ok", resp.Content)
+	assert.EqualValues(t, 2, requests.Load())
+}
+
+func TestSendStreamExhaustsRetryBudget(t *testing.T) {
+	var requests atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, "data: {\"error\":{\"message\":\"Upstream idle timeout exceeded\"}}\n") //nolint:errcheck
+	}))
+	defer srv.Close()
+
+	c := NewClient("k", WithBaseURL(srv.URL),
+		WithRetry(RetryPolicy{MaxRetries: 1, BaseDelay: time.Millisecond}))
+
+	_, err := c.SendStream(context.Background(), Request{Model: "m"}, nil)
+	require.ErrorContains(t, err, "stream error")
+	assert.EqualValues(t, 2, requests.Load())
+}
+
+func TestSendStreamZeroPolicySingleAttempt(t *testing.T) {
+	var requests atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, "data: {\"error\":{\"message\":\"boom\"}}\n") //nolint:errcheck
+	}))
+	defer srv.Close()
+
+	c := NewClient("k", WithBaseURL(srv.URL))
+
+	_, err := c.SendStream(context.Background(), Request{Model: "m"}, nil)
+	require.ErrorContains(t, err, "stream error")
+	assert.EqualValues(t, 1, requests.Load())
+}
+
+func TestSendStreamCancelDuringBackoffStopsRetry(t *testing.T) {
+	var requests atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, "data: {\"error\":{\"message\":\"boom\"}}\n") //nolint:errcheck
+	}))
+	defer srv.Close()
+
+	c := NewClient("k", WithBaseURL(srv.URL),
+		WithRetry(RetryPolicy{MaxRetries: 3, BaseDelay: time.Millisecond}))
+	c.sleep = func(context.Context, time.Duration) error { return context.Canceled }
+
+	_, err := c.SendStream(context.Background(), Request{Model: "m"}, nil)
+	require.ErrorIs(t, err, context.Canceled)
+	assert.EqualValues(t, 1, requests.Load())
+}
+
+func TestSendRetriesDecodeFailure(t *testing.T) {
+	var requests atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := requests.Add(1)
+		if n == 1 {
+			io.WriteString(w, "{not json") //nolint:errcheck
+
+			return
+		}
+
+		io.WriteString(w, `{"model":"m","choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}]}`) //nolint:errcheck
+	}))
+	defer srv.Close()
+
+	c := NewClient("k", WithBaseURL(srv.URL),
+		WithRetry(RetryPolicy{MaxRetries: 2, BaseDelay: time.Millisecond}))
+
+	resp, err := c.Send(context.Background(), Request{Model: "m"})
+	require.NoError(t, err)
+	assert.Equal(t, "ok", resp.Content)
+	assert.EqualValues(t, 2, requests.Load())
 }
