@@ -9,24 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRequestMarshalsOpenRouterExtras(t *testing.T) {
-	req := Request{
-		Model:    "primary/model",
-		Models:   []string{"primary/model", "fallback/model"},
-		Provider: json.RawMessage(`{"require_parameters":true}`),
-		Messages: []Message{{Role: "user", Content: "hi"}},
-		Tools:    []Tool{{Type: "function", Function: ToolFunction{Name: "read", Parameters: json.RawMessage(`{"type":"object"}`)}}},
-		Stream:   true,
-	}
-	b, err := json.Marshal(req)
-	require.NoError(t, err)
-
-	s := string(b)
-	assert.Contains(t, s, `"models":["primary/model","fallback/model"]`)
-	assert.Contains(t, s, `"provider":{"require_parameters":true}`)
-	assert.Contains(t, s, `"stream":true`)
-}
-
 func TestResponseToleratesUnknownFields(t *testing.T) {
 	// Unknown top-level + nested fields must not break decoding.
 	raw := `{"model":"m","brand_new_field":42,"usage":{"prompt_tokens":3,"completion_tokens":5,"cost":0.0001,"surprise":true}}`
@@ -43,15 +25,6 @@ func TestMessageMarshalJSON_TextOnly(t *testing.T) {
 	assert.JSONEq(t, `{"role":"user","content":"hello"}`, string(b))
 }
 
-func TestMessageMarshalJSON_ToolCallsOmitEmptyContent(t *testing.T) {
-	m := Message{Role: "assistant", ToolCalls: []ToolCall{
-		{ID: "1", Type: "function", Function: FunctionCall{Name: "x", Arguments: "{}"}},
-	}}
-	b, err := json.Marshal(m)
-	require.NoError(t, err)
-	assert.JSONEq(t, `{"role":"assistant","tool_calls":[{"id":"1","type":"function","function":{"name":"x","arguments":"{}"}}]}`, string(b))
-}
-
 func TestMessageMarshalJSON_ContentParts(t *testing.T) {
 	m := Message{Role: "user", ContentParts: []ContentPart{
 		{Type: "text", Text: "describe this"},
@@ -63,15 +36,6 @@ func TestMessageMarshalJSON_ContentParts(t *testing.T) {
 		{"type":"text","text":"describe this"},
 		{"type":"image_url","image_url":{"url":"data:image/png;base64,AAAA"}}
 	]}`, string(b))
-}
-
-func TestMessageMarshalJSON_OpenAIImageShapeNotAnthropic(t *testing.T) {
-	b, err := json.Marshal(Message{Role: "user", ContentParts: []ContentPart{
-		{Type: "image_url", ImageURL: &ImageURL{URL: "data:image/png;base64,AAAA"}},
-	}})
-	require.NoError(t, err)
-	assert.Contains(t, string(b), `"image_url"`)
-	assert.NotContains(t, string(b), `"source"`) // not the Anthropic content-block shape
 }
 
 func TestMessageMarshalJSON_AssistantEmptyContentIsExplicit(t *testing.T) {

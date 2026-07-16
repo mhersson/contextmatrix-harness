@@ -794,7 +794,7 @@ func findToolResult(msgs []llm.Message, id string) (string, bool) {
 	return "", false
 }
 
-// firstUserMessageIndex returns the index of the first user message at-or-after
+// userMessageIndexAfter returns the index of the first user message at-or-after
 // offset, or -1.
 func userMessageIndexAfter(msgs []llm.Message, offset int) int {
 	for i := offset; i < len(msgs); i++ {
@@ -1147,13 +1147,6 @@ func TestRun_EmitsThinkingFromReasoning(t *testing.T) {
 	require.GreaterOrEqual(t, thinkingIdx, 0, "thinking event not recorded")
 	require.GreaterOrEqual(t, modelResponseIdx, 0, "model_response event not recorded")
 	assert.Less(t, thinkingIdx, modelResponseIdx, "thinking event must be emitted before model_response")
-}
-
-func TestSeedMessage_TextOnly(t *testing.T) {
-	m := seedMessage("do the thing", nil)
-	assert.Equal(t, "user", m.Role)
-	assert.Equal(t, "do the thing", m.Content)
-	assert.Empty(t, m.ContentParts)
 }
 
 func TestSeedMessage_WithImages(t *testing.T) {

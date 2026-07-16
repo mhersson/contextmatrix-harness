@@ -250,5 +250,4 @@ func (n nonStreamResponse) toResponse() Response {
 	return r
 }
 
-// Compile-time check that Client satisfies the interface.
 var _ LLM = (*Client)(nil)

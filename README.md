@@ -6,10 +6,11 @@ and nothing about *what* the session is for.
 
 This module is consumed by both backends in the ContextMatrix ecosystem:
 
-- **contextmatrix-agent** wraps it with a task FSM (`orchestrator`/`worker`) to
-  execute board cards.
-- **contextmatrix-chat** wraps it with an interactive driver using the Inbox,
-  compaction, and seeded-history surfaces to power chat sessions.
+- **[contextmatrix-agent](https://github.com/mhersson/contextmatrix-agent)**
+  wraps it with a task FSM (`orchestrator`/`worker`) to execute board cards.
+- **[contextmatrix-chat](https://github.com/mhersson/contextmatrix-chat)**
+  wraps it with an interactive driver using the Inbox, compaction, and
+  seeded-history surfaces to power chat sessions.
 
 ## Packages
 
@@ -23,9 +24,11 @@ This module is consumed by both backends in the ContextMatrix ecosystem:
 
 ## Boundary invariant
 
-`harness` imports **only** `events`, `llm`, `tools` (+ stdlib). The module as a
-whole has **zero external module dependencies**. Both rules are enforced in CI by
-`scripts/deps-gate.sh` (`make deps-gate`). Keep the loop free of orchestration,
+`harness` imports **only** `events`, `llm`, `tools` (+ stdlib). The module has
+**zero external module dependencies** in non-test code (`testify` is the only
+test dependency). CI enforces the `harness` import allowlist and rejects any
+contextmatrix-* module dependency via `scripts/deps-gate.sh` (`make deps-gate`).
+Keep the loop free of orchestration,
 protocol, transport, and policy concerns — those belong in the consuming backend.
 The harness is likewise language-neutral toward the target workspace: it bakes in
 no target-language tools, prompts, or defaults — toolchain specifics enter only
@@ -60,3 +63,9 @@ Termination gates on execution: a terminating tool that returns an error, or
 whose arguments fail to parse, does **not** end the run — the model receives the
 error and retries. If the model ends by omission instead, `CompletionArgs` is
 `nil`. A registry with no `Terminal` tool behaves exactly as before.
+
+## Developing
+
+Contributor conventions, verification commands (`make test`, `make test-race`,
+`make lint`, `make deps-gate`, `make build`), and commit discipline live in
+`AGENTS.md`.

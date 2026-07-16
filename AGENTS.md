@@ -14,8 +14,10 @@ Orchestration, protocol, transport, and policy belong in the consuming backends
 - `harness` imports **only** `events`, `llm`, `tools` (+ stdlib + itself).
 - The module has **zero external module dependencies** in non-test code
   (`testify` is the only test dependency).
-- Both rules are enforced in CI by `make deps-gate` (`scripts/deps-gate.sh`). A
-  new import that breaks either one fails the gate — fix the design, not the gate.
+- CI (`make deps-gate`, `scripts/deps-gate.sh`) enforces the `harness` import
+  allowlist and rejects any contextmatrix-* module dependency; keeping other
+  external dependencies out is a review-enforced convention. An import that
+  trips the gate means fix the design, not the gate.
 
 ## Coding conventions
 
@@ -56,7 +58,7 @@ Orchestration, protocol, transport, and policy belong in the consuming backends
   its workspace (see the TOCTOU note in `tools/jail.go`). Do not add hardening
   that assumes a hostile workspace occupant.
 - **The client is OpenAI-compatible over raw HTTP** (default OpenRouter), with
-  `models[]` failover in `llm.Catalog`. No SDK.
+  `models[]` failover via `Request.Models` (an OpenRouter request extra). No SDK.
 
 ## Verification & commit discipline
 

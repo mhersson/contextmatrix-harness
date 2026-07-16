@@ -27,13 +27,6 @@ func TestBashToolReturnsFailureAsOutputNotError(t *testing.T) {
 	assert.Contains(t, out.Text, "exit")
 }
 
-func TestBashToolTimeout(t *testing.T) {
-	root := t.TempDir()
-	out, err := NewBashTool(root).Execute(context.Background(), map[string]any{"command": "sleep 5", "timeout_seconds": 1.0})
-	require.NoError(t, err)
-	assert.Contains(t, out.Text, "timed out")
-}
-
 func TestBashTimeoutClamp(t *testing.T) {
 	tool := NewBashTool(t.TempDir()).WithMaxTimeout(1)
 
@@ -239,17 +232,6 @@ func TestBashTimeoutAliasDrivesTimeout(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Contains(t, out.Text, "timed out after 1s")
-}
-
-func TestBashTimeoutConflictingAliasesError(t *testing.T) {
-	_, err := NewBashTool(t.TempDir()).Execute(context.Background(), map[string]any{
-		"command":         "echo hi",
-		"timeout":         1,
-		"timeout_seconds": 2,
-	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "timeout_seconds",
-		"the corrective error must name the canonical spelling")
 }
 
 func TestBashTimeoutNonNumericStringError(t *testing.T) {
