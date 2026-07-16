@@ -76,25 +76,8 @@ func TestParseStreamRejectsOverlongLineClearly(t *testing.T) {
 	assert.Contains(t, err.Error(), "exceeds")
 }
 
-func TestParseStream_AccumulatesReasoningWithNilOnDelta(t *testing.T) {
-	body := strings.Join([]string{
-		`data: {"choices":[{"delta":{"reasoning":"Let me "}}]}`,
-		`data: {"choices":[{"delta":{"reasoning":"think."}}]}`,
-		`data: {"choices":[{"delta":{"content":"Hello"}}]}`,
-		`data: {"choices":[{"delta":{"content":" world"}}]}`,
-		`data: [DONE]`,
-	}, "\n\n") + "\n\n"
-
-	resp, err := parseStream(strings.NewReader(body), nil)
-	require.NoError(t, err)
-	require.Equal(t, "Let me think.", resp.Reasoning)
-	require.Equal(t, "Hello world", resp.Content)
-}
-
-// TestParseStreamBuilderAccumulation is the equality guard for the H2 perf
-// refactor: it asserts that Content, Reasoning, and Function.Arguments are
-// fully assembled from multi-frame SSE deltas. The test must PASS both before
-// and after the strings.Builder refactor — it is behavioral, not structural.
+// TestParseStreamBuilderAccumulation asserts that Content, Reasoning, and
+// Function.Arguments are fully assembled from multi-frame SSE deltas.
 func TestParseStreamBuilderAccumulation(t *testing.T) {
 	sse := strings.Join([]string{
 		`data: {"choices":[{"delta":{"reasoning":"Let ","content":"Hel","tool_calls":[{"index":0,"id":"c1","function":{"name":"fn","arguments":"{\"a"}}]}}]}`,

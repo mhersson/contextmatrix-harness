@@ -49,8 +49,8 @@ func NewEmitter(human, transcript io.Writer) *Emitter {
 	return &Emitter{human: human, transcript: transcript, now: time.Now}
 }
 
-// Emit records an event and returns it.
-func (e *Emitter) Emit(kind Kind, data map[string]any) Event {
+// Emit records an event.
+func (e *Emitter) Emit(kind Kind, data map[string]any) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -66,8 +66,6 @@ func (e *Emitter) Emit(kind Kind, data map[string]any) Event {
 	if e.human != nil {
 		fmt.Fprintf(e.human, "[%d] %-14s %s\n", ev.Seq, ev.Kind, summarize(data)) //nolint:errcheck
 	}
-
-	return ev
 }
 
 func summarize(data map[string]any) string {

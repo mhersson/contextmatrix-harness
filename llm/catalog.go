@@ -35,7 +35,7 @@ func (c Catalog) Find(id string) (CatalogEntry, bool) {
 	return CatalogEntry{}, false
 }
 
-func ParseCatalog(r io.Reader) (Catalog, error) {
+func parseCatalog(r io.Reader) (Catalog, error) {
 	var doc struct {
 		Data []struct {
 			ID            string `json:"id"`
@@ -150,5 +150,5 @@ func (c *Client) FetchCatalog(ctx context.Context) (Catalog, error) {
 		return parseCatalogOpenAI(bytes.NewReader(body))
 	}
 
-	return ParseCatalog(bytes.NewReader(body))
+	return parseCatalog(bytes.NewReader(body))
 }

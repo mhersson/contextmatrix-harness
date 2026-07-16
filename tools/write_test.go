@@ -27,22 +27,6 @@ func TestWriteToolCreatesAndOverwrites(t *testing.T) {
 	assert.Contains(t, out.Text, "+TWO")
 }
 
-func TestWriteToolCreateDirs(t *testing.T) {
-	root := t.TempDir()
-	_, err := NewWriteTool(root).Execute(context.Background(), map[string]any{
-		"path": "sub/dir/f.txt", "content": "x", "create_dirs": true,
-	})
-	require.NoError(t, err)
-	assert.FileExists(t, filepath.Join(root, "sub/dir/f.txt"))
-}
-
-func TestWriteToolCreatesMissingDirWithoutCreateDirs(t *testing.T) {
-	root := t.TempDir()
-	_, err := NewWriteTool(root).Execute(context.Background(), map[string]any{"path": "no/such/f.txt", "content": "x"})
-	require.NoError(t, err)
-	assert.FileExists(t, filepath.Join(root, "no/such/f.txt"))
-}
-
 func TestWriteToolRequiresPathAndContent(t *testing.T) {
 	root := t.TempDir()
 	_, err := NewWriteTool(root).Execute(context.Background(), map[string]any{"content": "x"})

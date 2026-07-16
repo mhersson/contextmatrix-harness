@@ -17,7 +17,7 @@ func TestParseCatalog(t *testing.T) {
 		{"id":"vendor/weak","context_length":8192,"pricing":{"prompt":"0.0000002","completion":"0.0000006"},"supported_parameters":["tools","tool_choice"]},
 		{"id":"vendor/notools","context_length":4096,"pricing":{"prompt":"0.0000001","completion":"0.0000001"},"supported_parameters":["temperature"]}
 	]}`
-	cat, err := ParseCatalog(strings.NewReader(raw))
+	cat, err := parseCatalog(strings.NewReader(raw))
 	require.NoError(t, err)
 	require.Len(t, cat, 2)
 

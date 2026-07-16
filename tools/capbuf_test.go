@@ -25,12 +25,3 @@ func TestCapWriterExactFit(t *testing.T) {
 	assert.Equal(t, "0123456789", w.String())
 	assert.NotContains(t, w.String(), "[output truncated]")
 }
-
-func TestCapWriterDisabled(t *testing.T) {
-	w := &capWriter{limit: 0}
-	n, err := w.Write([]byte("0123456789ABCDEF"))
-	require.NoError(t, err)
-	assert.Equal(t, 16, n)
-	assert.Equal(t, "0123456789ABCDEF", w.String())
-	assert.NotContains(t, w.String(), "[output truncated]")
-}

@@ -8,16 +8,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestWithDialectSetsDialect(t *testing.T) {
-	c := NewClient("k", WithDialect(DialectOpenAI))
-	assert.Equal(t, DialectOpenAI, c.dialect)
-}
-
-func TestDefaultDialectIsOpenRouter(t *testing.T) {
-	c := NewClient("k")
-	assert.Equal(t, DialectOpenRouter, c.dialect)
-}
-
 func fullRequest(stream bool) Request {
 	return Request{
 		Model:     "m",

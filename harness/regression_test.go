@@ -79,7 +79,6 @@ func TestRegressionBinaryAndLargeTextBounded(t *testing.T) {
 	//   req[2] — carries large-text tool-result from turn 2
 	require.GreaterOrEqual(t, len(capt.requests), 3, "expected at least 3 LLM requests")
 
-	// --- binary tool-result assertion ---
 	// The second request carries the result of reading the binary file.
 	binResult, ok := findToolResult(capt.requests[1].Messages, "bin1")
 	require.True(t, ok, "binary tool-result message not found in request 2")
@@ -94,7 +93,6 @@ func TestRegressionBinaryAndLargeTextBounded(t *testing.T) {
 	// Must be tiny — well under 1 KB.
 	assert.Less(t, len(binResult), 1024, "binary result must be small (< 1 KB), got %d bytes", len(binResult))
 
-	// --- large text tool-result assertion ---
 	// The third request carries the result of reading the large text file.
 	txtResult, ok := findToolResult(capt.requests[2].Messages, "txt2")
 	require.True(t, ok, "large-text tool-result message not found in request 3")

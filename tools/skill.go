@@ -15,7 +15,7 @@ import (
 
 // skillNamePattern restricts a skill directory name to the same safe charset
 // ContextMatrix and the runner enforce. Defense-in-depth before any path join.
-var skillNamePattern = regexpMustCompileSkill()
+var skillNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 
 // skillEntry is one available skill in the menu.
 type skillEntry struct {
@@ -236,8 +236,4 @@ func parseSkillDescription(data []byte) (string, bool) {
 	}
 
 	return "", false
-}
-
-func regexpMustCompileSkill() *regexp.Regexp {
-	return regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 }

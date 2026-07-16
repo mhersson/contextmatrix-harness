@@ -619,3 +619,20 @@ func TestPrepareGlobPatternTooLong(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "too long")
 }
+
+// filterByGlob keeps the entries in rels matching pattern: pattern is split
+// and matched as-is, with no implicit "**/" anchoring -- any-depth matching
+// for bare patterns comes from normalizeGlobPattern (see prepareGlob), not
+// from this matcher. Kept for direct unit testing of the pure segment-match
+// behavior; production callers (globViaFd, globViaRg) go through prepareGlob
+// and streamEnumeration instead, since they stream subprocess output rather
+// than operate on an in-memory rels slice.
+func filterByGlob(rels []string, pattern string) ([]string, error) {
+	patternSegs := strings.Split(pattern, "/")
+
+	if err := validateGlobPatternSegs(pattern, patternSegs); err != nil {
+		return nil, err
+	}
+
+	return filterGlobStream(context.Background(), strings.NewReader(strings.Join(rels, "\n")), "", patternSegs)
+}

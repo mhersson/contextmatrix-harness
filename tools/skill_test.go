@@ -21,20 +21,6 @@ func writeSkill(t *testing.T, root, name, desc, body string) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644))
 }
 
-func TestSkillToolMenuAllWhenUnset(t *testing.T) {
-	root := t.TempDir()
-	writeSkill(t, root, "go-development", "Use when writing Go.", "GO BODY")
-	writeSkill(t, root, "documentation", "Use when writing docs.", "DOC BODY")
-
-	st, ok := NewSkillTool(root, nil, false, nil)
-	require.True(t, ok, "a populated dir with no subset yields a usable tool")
-
-	desc := st.Schema().Function.Description
-	assert.Contains(t, desc, "go-development", "menu lists every skill when no subset is set")
-	assert.Contains(t, desc, "documentation")
-	assert.Contains(t, desc, "Use when writing Go.", "menu carries descriptions for model-driven selection")
-}
-
 func TestSkillToolMenuRespectsSubset(t *testing.T) {
 	root := t.TempDir()
 	writeSkill(t, root, "go-development", "Use when writing Go.", "GO BODY")

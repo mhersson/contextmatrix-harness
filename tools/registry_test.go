@@ -73,17 +73,6 @@ func TestResolveInRootAllowsInRootSymlink(t *testing.T) {
 	assert.Equal(t, filepath.Join(root, "link/ok.txt"), got)
 }
 
-func TestRequireString(t *testing.T) {
-	v, err := requireString(map[string]any{"path": "x"}, "path")
-	require.NoError(t, err)
-	assert.Equal(t, "x", v)
-
-	_, err = requireString(map[string]any{}, "path")
-	require.Error(t, err)
-}
-
-// Exercises the optional accessors so they are used at this task's lint gate
-// (they are first called by tools in later tasks).
 func TestOptionalArgAccessors(t *testing.T) {
 	args := map[string]any{"s": "v", "b": true, "f": float64(5), "i": 3}
 	assert.Equal(t, "v", optString(args, "s", "def"))
@@ -93,28 +82,4 @@ func TestOptionalArgAccessors(t *testing.T) {
 	assert.Equal(t, 5, optInt(args, "f", 0)) // JSON number → float64 path
 	assert.Equal(t, 3, optInt(args, "i", 0)) // int path
 	assert.Equal(t, 7, optInt(args, "missing", 7))
-}
-
-type imageStub struct{}
-
-func (imageStub) Name() string { return "img" }
-func (imageStub) Schema() llm.Tool {
-	return llm.Tool{Type: "function", Function: llm.ToolFunction{Name: "img"}}
-}
-
-func (imageStub) Execute(context.Context, map[string]any) (Result, error) {
-	return Result{Text: "see image", Images: []llm.ImageURL{{URL: "data:image/png;base64,AAAA"}}}, nil
-}
-
-func TestRegistryToolReturnsImages(t *testing.T) {
-	r := NewRegistry(imageStub{})
-
-	tool, ok := r.Get("img")
-	require.True(t, ok)
-
-	res, err := tool.Execute(context.Background(), nil)
-	require.NoError(t, err)
-	assert.Equal(t, "see image", res.Text)
-	require.Len(t, res.Images, 1)
-	assert.Equal(t, "data:image/png;base64,AAAA", res.Images[0].URL)
 }

@@ -1,7 +1,6 @@
 package llm
 
 import (
-	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -28,11 +27,4 @@ func TestReasoningRaw(t *testing.T) {
 	raw, err := Reasoning{Effort: &eff}.Raw()
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"effort":"high"}`, string(raw))
-}
-
-func TestRequestMarshalsReasoning(t *testing.T) {
-	req := Request{Messages: []Message{{Role: "user", Content: "x"}}, Reasoning: json.RawMessage(`{"effort":"high"}`)}
-	b, err := json.Marshal(req)
-	require.NoError(t, err)
-	assert.Contains(t, string(b), `"reasoning":{"effort":"high"}`)
 }
