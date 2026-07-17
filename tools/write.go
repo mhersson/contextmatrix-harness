@@ -56,7 +56,7 @@ func (t WriteTool) Execute(_ context.Context, args map[string]any) (Result, erro
 	old, readErr := os.ReadFile(abs)
 	existed := readErr == nil
 
-	// The path is jailed by resolveInRoot above, so creating parents is safe —
+	// The path is jailed by resolveInRoot above, so creating parents is safe -
 	// and a missing parent otherwise costs the model turns on bash mkdir.
 	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
 		return Result{}, fmt.Errorf("create parent dirs: %w", err)

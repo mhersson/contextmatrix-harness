@@ -37,7 +37,7 @@ var harmonyTokenRe = regexp.MustCompile(`<\|[a-zA-Z0-9_]+\|>[^\s<]*`)
 func extractHarmonyToolCalls(content string) ([]ToolCall, string) {
 	matches := harmonyCallRe.FindAllStringSubmatchIndex(content, -1)
 	if len(matches) == 0 {
-		// No commentary calls — still strip framing tokens from rest.
+		// No commentary calls - still strip framing tokens from rest.
 		rest := stripHarmonyFraming(content)
 
 		return nil, rest
@@ -103,7 +103,7 @@ func extractHarmonyToolCalls(content string) ([]ToolCall, string) {
 // from s, returning the trimmed prose residual. The final-channel message text
 // is preserved (it is informational prose, not a tool call). Framing-like
 // tokens appearing literally inside final-channel prose are also stripped by
-// the token pass — such input is malformed and this is intentional; do not
+// the token pass - such input is malformed and this is intentional; do not
 // reorder the passes to "fix" it.
 func stripHarmonyFraming(s string) string {
 	// Replace <|channel|>final<|message|>TEXT with just TEXT.

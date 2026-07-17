@@ -43,7 +43,7 @@ func encodeRequest(req Request, d Dialect) ([]byte, error) {
 // extractReasoningEffort pulls the effort string out of an OpenRouter-shaped
 // reasoning object ({"effort":"..."}); returns "" when absent so the field is
 // omitted. Malformed input yields "". NOTE: only `effort` crosses to the openai
-// dialect — a reasoning object carrying only max_tokens/exclude yields "" and
+// dialect - a reasoning object carrying only max_tokens/exclude yields "" and
 // those budget controls are intentionally dropped (OpenAI reasoning_effort is a
 // string tier with no budget equivalent).
 func extractReasoningEffort(raw json.RawMessage) string {

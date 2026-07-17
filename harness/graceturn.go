@@ -13,7 +13,7 @@ import (
 
 // graceFinish makes the single grace call: terminal-only toolset, one synthetic
 // user message, one model call. Returns true only when a Terminal tool executed
-// successfully — the caller then returns res as a completed run. Mirrors the
+// successfully - the caller then returns res as a completed run. Mirrors the
 // main loop's usage accounting and emits StateChange events so transcripts show
 // the grace call explicitly. res.Turns is never incremented; the grace call is
 // evented, not counted.

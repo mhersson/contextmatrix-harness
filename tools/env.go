@@ -3,7 +3,7 @@ package tools
 import "os"
 
 // envAllowlist is the set of variables subprocesses spawned on behalf of the
-// model may inherit. Everything else — API keys, MCP credentials, git tokens —
+// model may inherit. Everything else - API keys, MCP credentials, git tokens -
 // is withheld; code-driven git (the worker's clone/push) injects credentials
 // per invocation instead.
 var envAllowlist = []string{"PATH", "HOME", "USER", "LANG", "LC_ALL", "TMPDIR", "TERM"}

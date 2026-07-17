@@ -4,7 +4,7 @@ import "fmt"
 
 // HeadTail bounds s to roughly limit bytes by keeping the first two thirds and
 // the last third with an explicit marker in between. limit <= 0 disables the
-// cap. The cut points are byte offsets — fine for tool output destined for a
+// cap. The cut points are byte offsets - fine for tool output destined for a
 // model prompt.
 func HeadTail(s string, limit int) string {
 	if limit <= 0 || len(s) <= limit {

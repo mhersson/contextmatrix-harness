@@ -42,7 +42,7 @@ func TestReadToolEmptyFile(t *testing.T) {
 
 func TestReadToolBinaryFileReturnsDescription(t *testing.T) {
 	root := t.TempDir()
-	// ELF-like header with embedded NUL byte — clearly binary
+	// ELF-like header with embedded NUL byte - clearly binary
 	binaryContent := []byte{0x7f, 'E', 'L', 'F', 0x00, 0x01, 0x02, 0x03, 0x04, 0x05}
 	require.NoError(t, os.WriteFile(filepath.Join(root, "program"), binaryContent, 0o755))
 	rt := NewReadTool(root)
@@ -80,7 +80,7 @@ func TestReadToolLargeFilePaginates(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(root, "big.txt"), []byte(sb.String()), 0o644))
 	rt := NewReadTool(root)
 
-	// First call: no offset/limit — should return first readMaxLines lines + hint
+	// First call: no offset/limit - should return first readMaxLines lines + hint
 	out, err := rt.Execute(context.Background(), map[string]any{"path": "big.txt"})
 	require.NoError(t, err)
 	assert.Contains(t, out.Text, "line 1\n")
@@ -90,7 +90,7 @@ func TestReadToolLargeFilePaginates(t *testing.T) {
 	// Must contain a pagination hint telling the model what offset to use
 	assert.Contains(t, out.Text, fmt.Sprintf("offset=%d", readMaxLines+1))
 
-	// Second call: offset=readMaxLines+1 — should return remaining lines, NO hint
+	// Second call: offset=readMaxLines+1 - should return remaining lines, NO hint
 	out, err = rt.Execute(context.Background(), map[string]any{"path": "big.txt", "offset": float64(readMaxLines + 1)})
 	require.NoError(t, err)
 	assert.Contains(t, out.Text, fmt.Sprintf("line %d\n", readMaxLines+1))
@@ -102,7 +102,7 @@ func TestReadToolLargeFilePaginates(t *testing.T) {
 func TestReadToolOverLongSingleLine(t *testing.T) {
 	root := t.TempDir()
 
-	// One very long line (~200 KB), no NUL — must not be misclassified as binary
+	// One very long line (~200 KB), no NUL - must not be misclassified as binary
 	lineLen := 200 * 1024
 	longLine := strings.Repeat("x", lineLen) + "\n"
 	require.NoError(t, os.WriteFile(filepath.Join(root, "minified.js"), []byte(longLine), 0o644))
@@ -117,7 +117,7 @@ func TestReadToolOverLongSingleLine(t *testing.T) {
 	// The marker must be concrete and honest about retrievability.
 	assert.Contains(t, out.Text, "bytes shown")
 	assert.Contains(t, out.Text, "not retrievable")
-	// This is the last content — must NOT offer a continuation offset.
+	// This is the last content - must NOT offer a continuation offset.
 	assert.NotContains(t, out.Text, "offset=")
 	// Reports actual byte counts (shown / total).
 	assert.Contains(t, out.Text, fmt.Sprintf("%d", readMaxBytes))

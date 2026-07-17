@@ -22,7 +22,7 @@ import (
 //
 // ContextWindow=1000, Threshold=0.85: effectiveCompactionThreshold returns 850
 // (the floor window-8192 is negative so it is not applied). PromptTokens=900
-// exceeds 850, triggering compaction. The important assertion is structural —
+// exceeds 850, triggering compaction. The important assertion is structural -
 // the right messages end up in the post-compaction request.
 func TestRun_CompactsWhenOverThreshold(t *testing.T) {
 	t.Helper()
@@ -38,7 +38,7 @@ func TestRun_CompactsWhenOverThreshold(t *testing.T) {
 	}
 
 	// Scripted responses consumed in order by both Send (compact) and SendStream (loop):
-	//   [0] Turn 1 SendStream: PromptTokens=900 — triggers compaction
+	//   [0] Turn 1 SendStream: PromptTokens=900 - triggers compaction
 	//   [1] Compact Send:      returns "SUMMARY"
 	//   [2] Turn 2 SendStream: no tool calls → "done"
 	fake := &capturingLLMSeq{responses: []llm.Response{
@@ -91,7 +91,7 @@ func TestRun_CompactsWhenOverThreshold(t *testing.T) {
 
 // TestCompact_ForwardsModelsAndProvider verifies that the summarize request
 // built inside compact carries Models and Provider from the Config, not just
-// Model — a Models[]-only consumer with an empty cfg.Model would otherwise
+// Model - a Models[]-only consumer with an empty cfg.Model would otherwise
 // send no routing information and cause the summary call to fail silently.
 func TestCompact_ForwardsModelsAndProvider(t *testing.T) {
 	t.Helper()
@@ -309,7 +309,7 @@ func TestCompactPreservesToolGroups(t *testing.T) {
 			assertWellPaired(t, out)
 
 			// The older slice sent to the summarizer must not end with an assistant
-			// that has unanswered tool_calls — that would produce a malformed request
+			// that has unanswered tool_calls - that would produce a malformed request
 			// and an HTTP 400 from the provider.
 			if len(capt.last.Messages) > 1 {
 				lastOlder := capt.last.Messages[len(capt.last.Messages)-1]

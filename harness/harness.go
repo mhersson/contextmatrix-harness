@@ -63,7 +63,7 @@ type Config struct {
 	Interactive        bool                // true = unbounded turns; incapable/transport errors await next input instead of terminating (requires Inbox)
 	// WrapUpTurns, when > 0, injects WrapUpMessage as a synthetic user message
 	// exactly once, at the top of the turn whose start leaves WrapUpTurns turns
-	// remaining before MaxTurns. It arrives as the freshest message in context —
+	// remaining before MaxTurns. It arrives as the freshest message in context -
 	// far more effective against end-of-run dithering than a static instruction
 	// from the seed prompt. Ignored in Interactive mode (no turn cap) and when 0
 	// (byte-identical to prior behavior).
@@ -146,7 +146,7 @@ func imageMessage(images []llm.ImageURL) llm.Message {
 
 // redactStr applies cfg.RedactToolOutput to s when configured, otherwise
 // returns s unchanged. Used to scrub raw model content/reasoning/tool-call
-// arguments before they reach the event stream and JSON transcript — the
+// arguments before they reach the event stream and JSON transcript - the
 // conversation history (msgs) is never passed through this, so the model
 // still executes with the real, unredacted content.
 func redactStr(cfg Config, s string) string {
@@ -306,7 +306,7 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 
 					if cerr == nil && len(newMsgs) < len(msgs) {
 						// Discard the triggering turn's response (its tool calls never
-						// execute) and still count the turn — a transcript consumer may
+						// execute) and still count the turn - a transcript consumer may
 						// see a model_response/thinking for an abandoned turn followed
 						// by the compaction event.
 						msgs = newMsgs
@@ -513,9 +513,9 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 
 		// Incapability detection: only evaluated when the model emitted tool calls.
 		// Turns with no tool calls are neutral (model answered or is awaiting input).
-		// Transport errors are caught above and return early — they never reach here.
+		// Transport errors are caught above and return early - they never reach here.
 		// A turn is "unproductive" only when every tool call failed to parse valid
-		// arguments — execution errors are domain failures, not model incapability.
+		// arguments - execution errors are domain failures, not model incapability.
 		if len(resp.ToolCalls) > 0 {
 			if turnHadCapableTool {
 				unproductive = 0
@@ -536,7 +536,7 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 					if cfg.Interactive {
 						unproductive = 0
 
-						// A human interjection drained mid-batch is the recovery input —
+						// A human interjection drained mid-batch is the recovery input -
 						// deliver it instead of blocking awaitNext for a brand-new message
 						// (which would lose it).
 						if len(pendingMsgs) > 0 {

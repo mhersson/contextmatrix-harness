@@ -1,7 +1,7 @@
 # contextmatrix-harness
 
 The FSM-free engine that drives one LLM session: an agentic tool-use loop plus
-the model client, tool registry, secret redaction, and event stream it needs —
+the model client, tool registry, secret redaction, and event stream it needs -
 and nothing about *what* the session is for.
 
 This module is consumed by both backends in the ContextMatrix ecosystem:
@@ -29,9 +29,9 @@ This module is consumed by both backends in the ContextMatrix ecosystem:
 test dependency). CI enforces the `harness` import allowlist and rejects any
 contextmatrix-* module dependency via `scripts/deps-gate.sh` (`make deps-gate`).
 Keep the loop free of orchestration,
-protocol, transport, and policy concerns — those belong in the consuming backend.
+protocol, transport, and policy concerns - those belong in the consuming backend.
 The harness is likewise language-neutral toward the target workspace: it bakes in
-no target-language tools, prompts, or defaults — toolchain specifics enter only
+no target-language tools, prompts, or defaults - toolchain specifics enter only
 from the caller through its seams (system prompt, verify check, bash env, skills
 mount, tool set).
 
@@ -60,7 +60,7 @@ own type; empty arguments normalize to `{}`). Other tool calls in the same turn
 execute if they precede the terminating call and are skipped if they follow it.
 
 Termination gates on execution: a terminating tool that returns an error, or
-whose arguments fail to parse, does **not** end the run — the model receives the
+whose arguments fail to parse, does **not** end the run - the model receives the
 error and retries. If the model ends by omission instead, `CompletionArgs` is
 `nil`. A registry with no `Terminal` tool behaves exactly as before.
 

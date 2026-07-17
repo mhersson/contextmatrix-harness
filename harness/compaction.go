@@ -23,7 +23,7 @@ const compactionPrompt = "Summarize the conversation so far into a compact brief
 // effectiveCompactionThreshold is the prompt-token count that triggers
 // compaction: threshold*window, capped below window-reservedHeadroomTokens
 // (so one turn's growth can't blow past the window), but the headroom floor
-// is applied only when it is itself positive — a small window still gets a
+// is applied only when it is itself positive - a small window still gets a
 // sane fractional trigger instead of a negative one.
 func effectiveCompactionThreshold(window int, threshold float64) int {
 	eff := int(threshold * float64(window))
@@ -38,7 +38,7 @@ func effectiveCompactionThreshold(window int, threshold float64) int {
 // message, keeping the system message and the last keepRecent messages verbatim.
 // Returns an error when there is not enough context to summarize meaningfully, or
 // when the summarize call fails. The returned Usage is the cost/token accounting
-// for the summarize call itself (zero value on any error path) — callers must
+// for the summarize call itself (zero value on any error path) - callers must
 // fold it into their running totals since it is a real billable request.
 func compact(ctx context.Context, client llm.LLM, cfg Config, msgs []llm.Message, keepRecent int, emit *events.Emitter) ([]llm.Message, llm.Usage, error) {
 	if keepRecent < 0 {

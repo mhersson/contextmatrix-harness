@@ -169,7 +169,7 @@ func (t SkillTool) menuText() string {
 
 // scanSkills returns the skills under dir (subdirectories with a parseable
 // SKILL.md), sorted by name. A missing dir or an unreadable/invalid skill is
-// skipped silently — skills are advisory, never fatal.
+// skipped silently - skills are advisory, never fatal.
 func scanSkills(dir string) []skillEntry {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -227,7 +227,7 @@ func parseSkillDescription(data []byte) (string, bool) {
 		}
 
 		if strings.TrimSpace(line) == "---" {
-			break // closing delimiter — stop; do not scan the body
+			break // closing delimiter - stop; do not scan the body
 		}
 
 		if after, ok := strings.CutPrefix(line, "description:"); ok {

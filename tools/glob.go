@@ -124,7 +124,7 @@ func (t GlobTool) globViaFd(ctx context.Context, bin, pattern, searchPath string
 	return t.streamEnumeration(ctx, cmd, patternSegs, "fd enumeration failed", nil)
 }
 
-// globViaRg lists files with `rg --files` (which honors .gitignore — unlike
+// globViaRg lists files with `rg --files` (which honors .gitignore - unlike
 // `rg --glob`, which overrides ignore rules) and applies the glob via the
 // same streaming filter as globViaFd (see streamEnumeration). rg exits 1 when
 // it finds no files, which ignoreExit below treats as "no matches" rather
