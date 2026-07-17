@@ -18,6 +18,8 @@ Orchestration, protocol, transport, and policy belong in the consuming backends
   allowlist and rejects any contextmatrix-* module dependency; keeping other
   external dependencies out is a review-enforced convention. An import that
   trips the gate means fix the design, not the gate.
+- tlsca is the one non-loop package: a pure-stdlib leaf utility (extra-CA HTTP
+  trust) shared by the backends. It imports stdlib only.
 
 ## Coding conventions
 
