@@ -54,7 +54,7 @@ func (c *Client) SendStream(ctx context.Context, req Request, onDelta func(Delta
 
 	// Stream-phase retry: doWithRetry covers connect-time failures, but a
 	// stream that opened cleanly can still die mid-read (in-band error
-	// frames — gateway idle timeouts — transport resets, decode errors).
+	// frames - gateway idle timeouts - transport resets, decode errors).
 	// The request is stateless, so each attempt re-sends it whole; deltas
 	// already delivered from a failed attempt may repeat, which callers
 	// accept as cosmetic. ctx errors are never retried.

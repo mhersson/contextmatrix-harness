@@ -52,7 +52,7 @@ func optInt(args map[string]any, key string, def int) int {
 // args, coercing float64, int, or a numeric string (models routinely send
 // `"30"` for numeric parameters). Absent keys return def. More than one key
 // present, a non-numeric string, or an unsupported type is a corrective error
-// the model can act on — silently falling back to the default is exactly the
+// the model can act on - silently falling back to the default is exactly the
 // failure this helper exists to prevent. keys[0] is the canonical spelling.
 func optIntCoerced(args map[string]any, keys []string, def int) (int, error) {
 	var found []string

@@ -19,12 +19,12 @@ import (
 // and then a large text file must receive bounded tool results, and the run
 // must complete without error.
 //
-// The real read tool is used — no mocking. The harness cap (ToolOutputMaxBytes)
+// The real read tool is used - no mocking. The harness cap (ToolOutputMaxBytes)
 // and the read tool's binary refusal and pagination are exercised together.
 func TestRegressionBinaryAndLargeTextBounded(t *testing.T) {
 	root := t.TempDir()
 
-	// Plant a large "binary" artifact — 400 KB of NUL bytes (ELF-like), well
+	// Plant a large "binary" artifact - 400 KB of NUL bytes (ELF-like), well
 	// above both the harness cap (131072) and the read tool's byte ceiling.
 	const binarySize = 400 * 1024
 
@@ -33,10 +33,10 @@ func TestRegressionBinaryAndLargeTextBounded(t *testing.T) {
 	binary[1] = 'E'
 	binary[2] = 'L'
 	binary[3] = 'F'
-	// Remaining bytes are 0x00 (NUL) — satisfies the binary detector.
+	// Remaining bytes are 0x00 (NUL) - satisfies the binary detector.
 	require.NoError(t, os.WriteFile(filepath.Join(root, "sysinfo"), binary, 0o755))
 
-	// Plant a large text file — 3000 numbered lines, exceeding the 2000-line
+	// Plant a large text file - 3000 numbered lines, exceeding the 2000-line
 	// default page size.
 	var sb strings.Builder
 	for i := 1; i <= 3000; i++ {
@@ -48,9 +48,9 @@ func TestRegressionBinaryAndLargeTextBounded(t *testing.T) {
 	reg := tools.NewRegistry(tools.NewReadTool(root))
 
 	// capturingLLMSeq records all requests AND plays scripted responses:
-	//   turn 1 — tool_call read on the binary file
-	//   turn 2 — tool_call read on the large text file
-	//   turn 3 — no tool calls (finish/done)
+	//   turn 1 - tool_call read on the binary file
+	//   turn 2 - tool_call read on the large text file
+	//   turn 3 - no tool calls (finish/done)
 	capt := &capturingLLMSeq{
 		responses: []llm.Response{
 			{ToolCalls: []llm.ToolCall{toolCall("bin1", "read", `{"path":"sysinfo"}`)}},
@@ -68,15 +68,15 @@ func TestRegressionBinaryAndLargeTextBounded(t *testing.T) {
 		Model:              "fake",
 	})
 
-	// The run must complete — no error, no overflow.
+	// The run must complete - no error, no overflow.
 	require.NoError(t, err)
 	assert.True(t, res.Completed, "run must complete; reason: %s", res.Reason)
 	assert.Equal(t, "done", res.Reason)
 
 	// We expect 3 requests:
-	//   req[0] — initial user message (no prior tool results)
-	//   req[1] — carries binary tool-result from turn 1
-	//   req[2] — carries large-text tool-result from turn 2
+	//   req[0] - initial user message (no prior tool results)
+	//   req[1] - carries binary tool-result from turn 1
+	//   req[2] - carries large-text tool-result from turn 2
 	require.GreaterOrEqual(t, len(capt.requests), 3, "expected at least 3 LLM requests")
 
 	// The second request carries the result of reading the binary file.
@@ -87,10 +87,10 @@ func TestRegressionBinaryAndLargeTextBounded(t *testing.T) {
 	assert.Contains(t, binResult, "binary file:", "binary result must contain the refusal summary")
 	assert.Contains(t, binResult, "not shown", "binary result must say content is not shown")
 
-	// Must NOT contain NUL bytes — the whole point of the fix.
+	// Must NOT contain NUL bytes - the whole point of the fix.
 	assert.NotContains(t, binResult, "\x00", "binary result must not contain NUL bytes")
 
-	// Must be tiny — well under 1 KB.
+	// Must be tiny - well under 1 KB.
 	assert.Less(t, len(binResult), 1024, "binary result must be small (< 1 KB), got %d bytes", len(binResult))
 
 	// The third request carries the result of reading the large text file.

@@ -69,7 +69,7 @@ func TestWrapUpNudgeInjectedOnceAtThreshold(t *testing.T) {
 	require.Len(t, w.requests, 6)
 
 	// Fires at the top of the turn that leaves exactly 2 remaining: after 4
-	// consumed turns, i.e. in request 5 (index 4) — and exactly once, ever.
+	// consumed turns, i.e. in request 5 (index 4) - and exactly once, ever.
 	assert.Equal(t, 0, countUserMsg(w.requests[3], "WRAP UP NOW"), "no nudge before the threshold")
 	assert.Equal(t, 1, countUserMsg(w.requests[4], "WRAP UP NOW"), "nudge lands when WrapUpTurns turns remain")
 	assert.Equal(t, 1, countUserMsg(w.requests[5], "WRAP UP NOW"), "nudge is injected exactly once")

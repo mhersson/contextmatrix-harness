@@ -88,7 +88,7 @@ func TestRunToolCallsBeatLyingFinishReason(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(root, "f.txt"), []byte("x"), 0o644))
 	reg := tools.NewRegistry(tools.NewReadTool(root))
 	f := &fakeLLM{responses: []llm.Response{
-		// finish_reason "stop" but tool_calls present — must still execute.
+		// finish_reason "stop" but tool_calls present - must still execute.
 		{FinishReason: "stop", ToolCalls: []llm.ToolCall{toolCall("1", "read", `{"path":"f.txt"}`)}},
 		{Content: "fin", FinishReason: "stop"},
 	}}
@@ -605,7 +605,7 @@ func TestRunRedactToolOutput(t *testing.T) {
 }
 
 // erroringTool is a fake tool that fails with an error carrying a large,
-// secret-bearing message — models a subprocess error that dumps full output.
+// secret-bearing message - models a subprocess error that dumps full output.
 type erroringTool struct{ msg string }
 
 func (e *erroringTool) Name() string { return "boom" }
@@ -893,7 +893,7 @@ func TestInboxNaturalStopWaitThenContinue(t *testing.T) {
 	assert.True(t, sawAwaiting, "awaiting_human state change not emitted")
 }
 
-// Case 4: closed inbox behaves like autonomous — single turn, done.
+// Case 4: closed inbox behaves like autonomous - single turn, done.
 func TestInboxClosedIsAutonomous(t *testing.T) {
 	reg := tools.NewRegistry(tools.NewReadTool(t.TempDir()))
 
@@ -1268,7 +1268,7 @@ func TestRunNoImageMessageWhenToolReturnsNoImages(t *testing.T) {
 }
 
 // imageInterjectTool both returns an image and pushes an interjection to the
-// inbox on its first call — models the mid-batch-interrupt + image injection
+// inbox on its first call - models the mid-batch-interrupt + image injection
 // combination.
 type imageInterjectTool struct {
 	inbox *scriptedInbox
@@ -1435,14 +1435,14 @@ func TestMultiImageAggregation(t *testing.T) {
 // TestTransportErrorEmitIsRedactedAndCapped covers the last content-bearing
 // emit site: a SendStream error embeds the provider response body (up to
 // 8 MiB), so the error event must pass through cfg.RedactToolOutput and the
-// ToolOutputMaxBytes cap like every other emit — and in the correct order
+// ToolOutputMaxBytes cap like every other emit - and in the correct order
 // (redact, then truncate), never the reverse.
 //
 // Two seed secrets are placed to straddle tools.HeadTail's two cut boundaries
 // (truncate.go:14-15: head = limit*2/3, tail = limit-head) rather than
 // sitting entirely inside the discarded middle. A secret that straddles a cut
 // survives as a partial, non-matching fragment on the "kept" side if
-// truncation runs before redaction — which the exact-literal redact pass can
+// truncation runs before redaction - which the exact-literal redact pass can
 // no longer catch, because the fragment isn't the full secret string. If
 // redaction runs first (correct order), the whole secret is masked before any
 // cut exists, so no fragment of it can ever appear in the output.

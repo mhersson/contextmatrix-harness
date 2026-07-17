@@ -20,7 +20,7 @@ type Message struct {
 
 // MarshalJSON emits `content` as the parts array when ContentParts is set,
 // otherwise as the string Content (byte-identical to the prior wire form).
-// When both are empty `content` is omitted — except for an assistant message
+// When both are empty `content` is omitted - except for an assistant message
 // with no tool calls, which emits an explicit `"content":""`: the Chat
 // Completions contract requires assistant content unless tool_calls is
 // present, and strict OpenAI-compatible endpoints reject a bare

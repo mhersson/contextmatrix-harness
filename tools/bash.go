@@ -12,12 +12,12 @@ import (
 	"github.com/mhersson/contextmatrix-harness/llm"
 )
 
-const defaultBashMaxTimeout = 600 // seconds — hard server-side ceiling
+const defaultBashMaxTimeout = 600 // seconds - hard server-side ceiling
 
 // bashWaitDelay bounds cmd.Wait after the child exits (or is killed) while a
 // descendant that escaped the process-group SIGKILL (e.g. via setsid) still
-// holds the output pipe. Without it, Wait blocks until pipe EOF — potentially
-// forever — wedging the turn past both the timeout and ctx cancellation.
+// holds the output pipe. Without it, Wait blocks until pipe EOF - potentially
+// forever - wedging the turn past both the timeout and ctx cancellation.
 const bashWaitDelay = 2 * time.Second
 
 type BashTool struct {

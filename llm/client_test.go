@@ -133,7 +133,7 @@ func TestSendStreamCapsOversizeErrorBody(t *testing.T) {
 }
 
 // TestSendCapsOversizeBody verifies that Send returns a "too large" error when a
-// server returns a body that exceeds maxResponseBody — an explicit, directly
+// server returns a body that exceeds maxResponseBody - an explicit, directly
 // assertable error rather than silent truncation.
 func TestSendCapsOversizeBody(t *testing.T) {
 	oversized := make([]byte, maxResponseBody+1)

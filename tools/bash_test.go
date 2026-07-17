@@ -21,7 +21,7 @@ func TestBashToolRunsInRoot(t *testing.T) {
 
 func TestBashToolReturnsFailureAsOutputNotError(t *testing.T) {
 	root := t.TempDir()
-	// A failing command must NOT return a Go error — the model needs to see it.
+	// A failing command must NOT return a Go error - the model needs to see it.
 	out, err := NewBashTool(root).Execute(context.Background(), map[string]any{"command": "exit 3"})
 	require.NoError(t, err)
 	assert.Contains(t, out.Text, "exit")
@@ -172,7 +172,7 @@ func TestBashToolBackgroundDaemonReturnsPromptly(t *testing.T) {
 		require.NoError(t, o.err)
 		assert.Less(t, time.Since(start), 10*time.Second)
 		assert.Contains(t, o.out.Text, "started")
-		// ErrWaitDelay is expected plumbing, not a command failure — it must be
+		// ErrWaitDelay is expected plumbing, not a command failure - it must be
 		// mapped to a calm note, not "[command exited with error: ...]".
 		assert.NotContains(t, o.out.Text, "command exited with error")
 	case <-time.After(15 * time.Second):
