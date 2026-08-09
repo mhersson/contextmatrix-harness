@@ -129,6 +129,51 @@ func TestGraceTurnToolChoiceFallbackOn400(t *testing.T) {
 	assert.Nil(t, w.requests[4].ToolChoice, "the retry falls back to the instruction-only contract")
 }
 
+func TestGraceTurnDeclinesWithoutRetryOnNon400Error(t *testing.T) {
+	fin := &graceFinishTool{}
+	reg := tools.NewRegistry(tools.NewReadTool(t.TempDir()), fin)
+
+	w := &burnLLM{
+		errs: []error{nil, nil, nil, errors.New("llm endpoint status 500: internal error")},
+	}
+
+	res, err := Run(context.Background(), w, reg, newEmitter(), "task", Config{MaxTurns: 3, GraceTurn: true})
+	require.NoError(t, err)
+	assert.False(t, res.Completed)
+	assert.Equal(t, "max_turns", res.Reason)
+	assert.False(t, fin.called)
+
+	// 3 burn requests + exactly ONE grace request - a non-400 error declines
+	// without a retry.
+	require.Len(t, w.requests, 4)
+}
+
+func TestGraceTurnFallbackRetryDeclinedStaysMaxTurns(t *testing.T) {
+	fin := &graceFinishTool{}
+	reg := tools.NewRegistry(tools.NewReadTool(t.TempDir()), fin)
+
+	w := &burnLLM{
+		errs: []error{nil, nil, nil, errors.New("llm endpoint status 400: bad tool_choice")},
+		responses: []llm.Response{
+			{ToolCalls: []llm.ToolCall{toolCall("1", "read", `{"path":"missing"}`)}},
+			{ToolCalls: []llm.ToolCall{toolCall("2", "read", `{"path":"missing"}`)}},
+			{ToolCalls: []llm.ToolCall{toolCall("3", "read", `{"path":"missing"}`)}},
+			{FinishReason: "stop"}, // the retry succeeds transport-wise but declines with prose
+		},
+	}
+
+	res, err := Run(context.Background(), w, reg, newEmitter(), "task", Config{MaxTurns: 3, GraceTurn: true})
+	require.NoError(t, err)
+	assert.False(t, res.Completed)
+	assert.Equal(t, "max_turns", res.Reason)
+	assert.False(t, fin.called)
+
+	// 3 burn requests + 2 grace attempts (forced choice rejected, retry declines too).
+	require.Len(t, w.requests, 5)
+	assert.NotNil(t, w.requests[3].ToolChoice, "the first grace attempt still forces a choice")
+	assert.Nil(t, w.requests[4].ToolChoice, "the retry falls back to the instruction-only contract")
+}
+
 func TestGraceTurnDeclinedStaysMaxTurns(t *testing.T) {
 	fin := &graceFinishTool{}
 	reg := tools.NewRegistry(tools.NewReadTool(t.TempDir()), fin)

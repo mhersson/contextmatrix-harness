@@ -34,14 +34,16 @@ func graceFinish(ctx context.Context, client llm.LLM, reg *tools.Registry, emit 
 	// grace calls measurably fail on weaker models - one production run answered
 	// the "ONLY action available" message with yet another exploration call.
 	var choice json.RawMessage
+
 	if len(termNames) == 1 {
-		choice = json.RawMessage(fmt.Sprintf(`{"type":"function","function":{"name":%q}}`, termNames[0]))
+		name, _ := json.Marshal(termNames[0])
+		choice = json.RawMessage(fmt.Sprintf(`{"type":"function","function":{"name":%s}}`, name))
 	} else {
 		choice = json.RawMessage(`"required"`)
 	}
 
 	resp, err := sendTurn(ctx, client, emit, cfg, msgs, termSchemas, choice, res)
-	if err != nil && choice != nil && strings.Contains(err.Error(), "llm endpoint status 400") {
+	if err != nil && strings.Contains(err.Error(), "llm endpoint status 400") {
 		// Some OpenAI-compatible gateways reject tool_choice for some models; the
 		// client surfaces a 400 as a terminal error, so retry once without the
 		// forcing and fall back to the instruction-only contract.
