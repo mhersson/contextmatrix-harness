@@ -86,14 +86,18 @@ type ToolFunction struct {
 
 // Request is the /chat/completions body. Provider/Models are OpenRouter extras.
 type Request struct {
-	Model     string          `json:"model,omitempty"`
-	Models    []string        `json:"models,omitempty"`
-	Messages  []Message       `json:"messages"`
-	Tools     []Tool          `json:"tools,omitempty"`
-	Stream    bool            `json:"stream,omitempty"`
-	Provider  json.RawMessage `json:"provider,omitempty"`
-	Reasoning json.RawMessage `json:"reasoning,omitempty"`
-	Usage     *UsageOpt       `json:"usage,omitempty"`
+	Model    string    `json:"model,omitempty"`
+	Models   []string  `json:"models,omitempty"`
+	Messages []Message `json:"messages"`
+	Tools    []Tool    `json:"tools,omitempty"`
+	// ToolChoice is the OpenAI-compatible tool_choice value: a JSON string
+	// ("auto", "required") or a {"type":"function","function":{"name":...}}
+	// object. Raw so callers control the exact wire shape; omitted when nil.
+	ToolChoice json.RawMessage `json:"tool_choice,omitempty"`
+	Stream     bool            `json:"stream,omitempty"`
+	Provider   json.RawMessage `json:"provider,omitempty"`
+	Reasoning  json.RawMessage `json:"reasoning,omitempty"`
+	Usage      *UsageOpt       `json:"usage,omitempty"`
 	// openai dialect only; populated by encodeRequest, never by callers. Slated to
 	// move to a private wire struct in the next major version.
 	ReasoningEffort string         `json:"reasoning_effort,omitempty"`

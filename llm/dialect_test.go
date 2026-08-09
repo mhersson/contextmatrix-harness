@@ -71,6 +71,30 @@ func TestEncodeRequestOpenAINonStreamHasNoStreamOptions(t *testing.T) {
 	assert.JSONEq(t, `"high"`, string(m["reasoning_effort"]), "reasoning_effort must be present on non-stream openai calls")
 }
 
+func TestEncodeRequestToolChoicePassesThroughBothDialects(t *testing.T) {
+	for _, d := range []Dialect{DialectOpenRouter, DialectOpenAI} {
+		req := fullRequest(true)
+		req.ToolChoice = json.RawMessage(`"required"`)
+
+		b, err := encodeRequest(req, d)
+		require.NoError(t, err)
+
+		m := keys(t, b)
+		assert.JSONEq(t, `"required"`, string(m["tool_choice"]), "dialect %v must carry tool_choice", d)
+	}
+}
+
+func TestEncodeRequestOmitsToolChoiceWhenUnset(t *testing.T) {
+	for _, d := range []Dialect{DialectOpenRouter, DialectOpenAI} {
+		b, err := encodeRequest(fullRequest(true), d)
+		require.NoError(t, err)
+
+		m := keys(t, b)
+		_, ok := m["tool_choice"]
+		assert.False(t, ok, "dialect %v must omit tool_choice when unset", d)
+	}
+}
+
 func TestExtractReasoningEffort(t *testing.T) {
 	assert.Equal(t, "low", extractReasoningEffort(json.RawMessage(`{"effort":"low"}`)))
 	assert.Empty(t, extractReasoningEffort(nil))
