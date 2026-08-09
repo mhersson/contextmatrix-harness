@@ -15,9 +15,12 @@ import (
 
 // burnLLM records every request and plays back scripted responses; once the
 // script is exhausted it returns a tool-call turn on every request (never
-// stops on its own). An empty script burns turns from the start.
+// stops on its own). An empty script burns turns from the start. errs, when
+// set, is consumed in request order ahead of responses: a non-nil entry
+// returns a zero Response and that error instead of playing back a response.
 type burnLLM struct {
 	responses []llm.Response
+	errs      []error
 	requests  []llm.Request
 }
 
@@ -27,6 +30,15 @@ func (w *burnLLM) Send(ctx context.Context, req llm.Request) (llm.Response, erro
 
 func (w *burnLLM) SendStream(_ context.Context, req llm.Request, _ func(llm.Delta)) (llm.Response, error) {
 	w.requests = append(w.requests, req)
+
+	if len(w.errs) > 0 {
+		e := w.errs[0]
+		w.errs = w.errs[1:]
+
+		if e != nil {
+			return llm.Response{}, e
+		}
+	}
 
 	if len(w.responses) > 0 {
 		r := w.responses[0]

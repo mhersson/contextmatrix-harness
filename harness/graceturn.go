@@ -29,7 +29,27 @@ func graceFinish(ctx context.Context, client llm.LLM, reg *tools.Registry, emit 
 		"Turn limit reached. This is a final grace call: the ONLY action available is the %s tool. Call it NOW with your best final arguments; any other response discards the run's completed work.",
 		strings.Join(termNames, "/"))})
 
-	resp, err := sendTurn(ctx, client, emit, cfg, msgs, termSchemas, res)
+	// Force the terminal call instead of merely offering it: one terminal tool
+	// gets a named function choice, several get "required". Instruction-only
+	// grace calls measurably fail on weaker models - one production run answered
+	// the "ONLY action available" message with yet another exploration call.
+	var choice json.RawMessage
+
+	if len(termNames) == 1 {
+		name, _ := json.Marshal(termNames[0])
+		choice = json.RawMessage(fmt.Sprintf(`{"type":"function","function":{"name":%s}}`, name))
+	} else {
+		choice = json.RawMessage(`"required"`)
+	}
+
+	resp, err := sendTurn(ctx, client, emit, cfg, msgs, termSchemas, choice, res)
+	if err != nil && strings.Contains(err.Error(), "llm endpoint status 400") {
+		// Some OpenAI-compatible gateways reject tool_choice for some models; the
+		// client surfaces a 400 as a terminal error, so retry once without the
+		// forcing and fall back to the instruction-only contract.
+		resp, err = sendTurn(ctx, client, emit, cfg, msgs, termSchemas, nil, res)
+	}
+
 	if err != nil {
 		return false
 	}
@@ -87,14 +107,16 @@ func terminalSchemas(reg *tools.Registry) ([]llm.Tool, []string) {
 // loop's request construction and usage accounting. res.Turns is read-only here:
 // the caller decides whether the call counts (the grace call does not). On a
 // transport error the caller declines; the raw error is returned unwrapped.
-func sendTurn(ctx context.Context, client llm.LLM, emit *events.Emitter, cfg Config, msgs []llm.Message, toolSchemas []llm.Tool, res *Result) (llm.Response, error) {
+// choice, when non-nil, is passed through as the request's tool_choice.
+func sendTurn(ctx context.Context, client llm.LLM, emit *events.Emitter, cfg Config, msgs []llm.Message, toolSchemas []llm.Tool, choice json.RawMessage, res *Result) (llm.Response, error) {
 	req := llm.Request{
-		Model:     cfg.Model,
-		Models:    cfg.Models,
-		Provider:  cfg.Provider,
-		Reasoning: cfg.Reasoning,
-		Messages:  msgs,
-		Tools:     toolSchemas,
+		Model:      cfg.Model,
+		Models:     cfg.Models,
+		Provider:   cfg.Provider,
+		Reasoning:  cfg.Reasoning,
+		Messages:   msgs,
+		Tools:      toolSchemas,
+		ToolChoice: choice,
 	}
 	emit.Emit(events.ModelRequest, map[string]any{"turn": res.Turns, "model": cfg.Model, "messages": len(msgs)})
 
