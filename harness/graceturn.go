@@ -125,9 +125,13 @@ func sendTurn(ctx context.Context, client llm.LLM, emit *events.Emitter, cfg Con
 		return resp, err
 	}
 
+	prompt, cacheRead, cacheCreation := resp.Usage.Buckets()
+
 	res.TotalCostUSD += resp.Usage.Cost
-	res.PromptTokens += int64(resp.Usage.PromptTokens)
+	res.PromptTokens += int64(prompt)
 	res.CompletionTokens += int64(resp.Usage.CompletionTokens)
+	res.CacheReadTokens += int64(cacheRead)
+	res.CacheCreationTokens += int64(cacheCreation)
 
 	if resp.Model != "" {
 		res.ModelUsed = resp.Model

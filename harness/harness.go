@@ -91,12 +91,18 @@ type Result struct {
 	TotalCostUSD     float64
 	PromptTokens     int64
 	CompletionTokens int64
-	ToolCallCount    int
-	ToolCallFailures int
-	RepairCount      int
-	ModelUsed        string
-	Output           string          // final assistant text of the last turn
-	CompletionArgs   json.RawMessage // terminating-tool call arguments; nil if the run ended by omission
+	// CacheReadTokens / CacheCreationTokens are disjoint cache buckets
+	// normalized by llm.Usage.Buckets(); PromptTokens excludes the cached
+	// portion whenever the gateway reports it. Zero on gateways that emit no
+	// cache detail.
+	CacheReadTokens     int64
+	CacheCreationTokens int64
+	ToolCallCount       int
+	ToolCallFailures    int
+	RepairCount         int
+	ModelUsed           string
+	Output              string          // final assistant text of the last turn
+	CompletionArgs      json.RawMessage // terminating-tool call arguments; nil if the run ended by omission
 	// Messages is the full in-memory conversation at stop time: system
 	// prompt, seeded History, the task message, and every turn's assistant
 	// and tool messages. Callers that run a model in rounds (mob seats)
@@ -263,9 +269,13 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 			return res, err
 		}
 
+		prompt, cacheRead, cacheCreation := resp.Usage.Buckets()
+
 		res.TotalCostUSD += resp.Usage.Cost
-		res.PromptTokens += int64(resp.Usage.PromptTokens)
+		res.PromptTokens += int64(prompt)
 		res.CompletionTokens += int64(resp.Usage.CompletionTokens)
+		res.CacheReadTokens += int64(cacheRead)
+		res.CacheCreationTokens += int64(cacheCreation)
 
 		if resp.Model != "" {
 			res.ModelUsed = resp.Model
@@ -295,9 +305,14 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 						// The summarize call is real and billable regardless of whether it
 						// shrank the history, so it is counted against the budget here,
 						// before the shrink/no-progress branch below.
+						cPrompt, cCacheRead, cCacheCreation := cUsage.Buckets()
+
 						res.TotalCostUSD += cUsage.Cost
-						res.PromptTokens += int64(cUsage.PromptTokens)
+						res.PromptTokens += int64(cPrompt)
 						res.CompletionTokens += int64(cUsage.CompletionTokens)
+						res.CacheReadTokens += int64(cCacheRead)
+						res.CacheCreationTokens += int64(cCacheCreation)
+
 						emit.Emit(events.UsageKind, map[string]any{
 							"prompt_tokens": cUsage.PromptTokens, "completion_tokens": cUsage.CompletionTokens,
 							"cost_usd": cUsage.Cost, "model": cfg.Model, "phase": "compaction",

@@ -82,6 +82,34 @@ func TestGraceTurnLandsTerminalCall(t *testing.T) {
 	assert.JSONEq(t, `{"type":"function","function":{"name":"finish"}}`, string(graceReq.ToolChoice))
 }
 
+func TestGraceTurnCacheBucketsAccumulate(t *testing.T) {
+	fin := &graceFinishTool{}
+	reg := tools.NewRegistry(tools.NewReadTool(t.TempDir()), fin)
+
+	// 3 burn turns (no usage), then the grace call lands with cache detail.
+	w := &burnLLM{responses: []llm.Response{
+		{ToolCalls: []llm.ToolCall{toolCall("1", "read", `{"path":"missing"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("2", "read", `{"path":"missing"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("3", "read", `{"path":"missing"}`)}},
+		{
+			ToolCalls: []llm.ToolCall{toolCall("4", "finish", `{"commit_message":"done"}`)},
+			Usage: llm.Usage{
+				PromptTokens: 100, CompletionTokens: 10,
+				PromptTokensDetails:      &llm.PromptTokensDetails{CachedTokens: 80},
+				CacheCreationInputTokens: 7,
+			},
+		},
+	}}
+
+	res, err := Run(context.Background(), w, reg, newEmitter(), "task", Config{MaxTurns: 3, GraceTurn: true})
+	require.NoError(t, err)
+	assert.True(t, res.Completed)
+	assert.EqualValues(t, 20, res.PromptTokens, "grace call's 100 prompt tokens minus the 80 cached")
+	assert.EqualValues(t, 10, res.CompletionTokens)
+	assert.EqualValues(t, 80, res.CacheReadTokens)
+	assert.EqualValues(t, 7, res.CacheCreationTokens)
+}
+
 func TestGraceTurnToolChoiceRequiredWithMultipleTerminals(t *testing.T) {
 	fin := &graceFinishTool{}
 	other := &namedTerminalTool{name: "abort"}
