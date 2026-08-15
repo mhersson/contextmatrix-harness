@@ -305,9 +305,14 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 						// The summarize call is real and billable regardless of whether it
 						// shrank the history, so it is counted against the budget here,
 						// before the shrink/no-progress branch below.
+						cPrompt, cCacheRead, cCacheCreation := cUsage.Buckets()
+
 						res.TotalCostUSD += cUsage.Cost
-						res.PromptTokens += int64(cUsage.PromptTokens)
+						res.PromptTokens += int64(cPrompt)
 						res.CompletionTokens += int64(cUsage.CompletionTokens)
+						res.CacheReadTokens += int64(cCacheRead)
+						res.CacheCreationTokens += int64(cCacheCreation)
+
 						emit.Emit(events.UsageKind, map[string]any{
 							"prompt_tokens": cUsage.PromptTokens, "completion_tokens": cUsage.CompletionTokens,
 							"cost_usd": cUsage.Cost, "model": cfg.Model, "phase": "compaction",
