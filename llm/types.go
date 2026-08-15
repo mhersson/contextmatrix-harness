@@ -111,11 +111,47 @@ type UsageOpt struct {
 	Include bool `json:"include"`
 }
 
+// PromptTokensDetails is the OpenAI-shape nested usage detail. cached_tokens
+// counts the portion of prompt_tokens served from prompt cache - a SUBSET of
+// prompt_tokens on this wire shape.
+type PromptTokensDetails struct {
+	CachedTokens int `json:"cached_tokens"`
+}
+
 type Usage struct {
 	PromptTokens     int     `json:"prompt_tokens"`
 	CompletionTokens int     `json:"completion_tokens"`
 	TotalTokens      int     `json:"total_tokens"`
 	Cost             float64 `json:"cost"` // OpenRouter authoritative USD for this call
+	// PromptTokensDetails carries the OpenAI-shape cached-token detail
+	// (cached_tokens is a subset of prompt_tokens). Emitted by OpenRouter and
+	// OpenAI-native gateways.
+	PromptTokensDetails *PromptTokensDetails `json:"prompt_tokens_details,omitempty"`
+	// CacheReadInputTokens / CacheCreationInputTokens are Anthropic-shim
+	// extensions (LiteLLM-style gateways) where cache buckets are DISJOINT
+	// from prompt_tokens. Zero when the gateway does not emit them.
+	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
+}
+
+// Buckets normalizes both cache wire shapes into disjoint token buckets
+// matching the Anthropic pricing model, where prompt excludes cache traffic:
+// the OpenAI subset shape has cached_tokens subtracted out of prompt; the
+// Anthropic-shim shape passes through unchanged. When both appear the shim
+// value wins for cacheRead. Absent cache info yields (prompt_tokens, 0, 0).
+func (u Usage) Buckets() (prompt, cacheRead, cacheCreation int) {
+	prompt = u.PromptTokens
+
+	if u.PromptTokensDetails != nil && u.PromptTokensDetails.CachedTokens > 0 {
+		cacheRead = min(u.PromptTokensDetails.CachedTokens, prompt)
+		prompt -= cacheRead
+	}
+
+	if u.CacheReadInputTokens > 0 {
+		cacheRead = u.CacheReadInputTokens
+	}
+
+	return prompt, cacheRead, u.CacheCreationInputTokens
 }
 
 // Response is the assembled result of one model call (stream or non-stream).

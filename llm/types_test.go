@@ -73,3 +73,46 @@ func TestMessageMarshalJSON_AssistantEmptyContentIsExplicit(t *testing.T) {
 		})
 	}
 }
+
+func TestUsageBuckets(t *testing.T) {
+	tests := []struct {
+		name                             string
+		raw                              string
+		prompt, cacheRead, cacheCreation int
+	}{
+		{
+			name:   "no cache info",
+			raw:    `{"prompt_tokens":100,"completion_tokens":10,"total_tokens":110}`,
+			prompt: 100,
+		},
+		{
+			name:      "openai subset shape subtracts cached from prompt",
+			raw:       `{"prompt_tokens":100,"completion_tokens":10,"prompt_tokens_details":{"cached_tokens":80}}`,
+			prompt:    20,
+			cacheRead: 80,
+		},
+		{
+			name:          "anthropic shim shape is disjoint",
+			raw:           `{"prompt_tokens":100,"completion_tokens":10,"cache_read_input_tokens":500,"cache_creation_input_tokens":40}`,
+			prompt:        100,
+			cacheRead:     500,
+			cacheCreation: 40,
+		},
+		{
+			name:      "cached_tokens clamped to prompt_tokens",
+			raw:       `{"prompt_tokens":50,"prompt_tokens_details":{"cached_tokens":80}}`,
+			prompt:    0,
+			cacheRead: 50,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var u Usage
+			require.NoError(t, json.Unmarshal([]byte(tt.raw), &u))
+			p, cr, cc := u.Buckets()
+			assert.Equal(t, tt.prompt, p)
+			assert.Equal(t, tt.cacheRead, cr)
+			assert.Equal(t, tt.cacheCreation, cc)
+		})
+	}
+}
