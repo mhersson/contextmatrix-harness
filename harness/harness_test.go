@@ -282,6 +282,26 @@ func TestRun_CompactionCostIsCounted(t *testing.T) {
 	assert.EqualValues(t, 20, res.CompletionTokens)
 }
 
+func TestRun_CacheTokenBucketsAccumulateIntoResult(t *testing.T) {
+	f := &fakeLLM{responses: []llm.Response{
+		{
+			Content:      "done",
+			FinishReason: "stop",
+			Usage: llm.Usage{
+				PromptTokens: 100, CompletionTokens: 10, Cost: 0.5,
+				PromptTokensDetails:      &llm.PromptTokensDetails{CachedTokens: 80},
+				CacheCreationInputTokens: 7,
+			},
+		},
+	}}
+	res, err := Run(context.Background(), f, tools.NewRegistry(), newEmitter(), "task", Config{MaxTurns: 10})
+	require.NoError(t, err)
+	assert.Equal(t, int64(20), res.PromptTokens)
+	assert.Equal(t, int64(10), res.CompletionTokens)
+	assert.Equal(t, int64(80), res.CacheReadTokens)
+	assert.Equal(t, int64(7), res.CacheCreationTokens)
+}
+
 func TestRun_CompactionThresholdAbove85DoesNotHardStopEarly(t *testing.T) {
 	reg := tools.NewRegistry(tools.NewReadTool(t.TempDir()))
 	f := &fakeLLM{responses: []llm.Response{
