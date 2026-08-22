@@ -101,8 +101,16 @@ type Result struct {
 	ToolCallFailures    int
 	RepairCount         int
 	ModelUsed           string
-	Output              string          // final assistant text of the last turn
-	CompletionArgs      json.RawMessage // terminating-tool call arguments; nil if the run ended by omission
+	// IncapableDetail is set only when Reason == ReasonIncapable and the
+	// failed argument payloads matched an upstream-defect pattern; empty
+	// otherwise, including in interactive mode, which never returns
+	// ReasonIncapable. When set it is a human-readable sentence naming the
+	// suspected defect, safe to surface to an operator as-is (for example as
+	// a blacklist reason); the error event's suspected_upstream_defect field
+	// carries the short pattern name instead.
+	IncapableDetail string
+	Output          string          // final assistant text of the last turn
+	CompletionArgs  json.RawMessage // terminating-tool call arguments; nil if the run ended by omission
 	// Messages is the full in-memory conversation at stop time: system
 	// prompt, seeded History, the task message, and every turn's assistant
 	// and tool messages. Callers that run a model in rounds (mob seats)
@@ -190,6 +198,11 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 	// successfully. Resets to zero on any successful tool execution. Turns with
 	// no tool calls are neutral and do not touch this counter.
 	unproductive := 0
+
+	// failedArgsWindow holds, for each turn in the current unproductive streak,
+	// every raw arguments string that failed to parse - fed to classifyIncapable
+	// when the threshold trips. Reset alongside unproductive.
+	var failedArgsWindow [][]string
 
 	// nudged guards the one-shot wrap-up injection.
 	nudged := false
@@ -428,6 +441,10 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 		// domain failure, not a model incapability signal.
 		turnHadCapableTool := false
 
+		// turnFailedArgs collects the raw arguments string of every tool call
+		// this turn that failed to parse, for classifyIncapable evidence.
+		var turnFailedArgs []string
+
 		// terminated is set when a tools.Terminal tool executes successfully this
 		// turn; completionArgs carries that call's normalized arguments.
 		terminated := false
@@ -463,6 +480,8 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 				args, err := parseArgs(tc.Function.Arguments)
 				if err != nil {
 					res.RepairCount++
+
+					turnFailedArgs = append(turnFailedArgs, tc.Function.Arguments)
 					rm := repairMessage(tc.Function.Name, err)
 					msgs = append(msgs, toolResultMsg(tc.ID, rm))
 					emit.Emit(events.ToolRepair, map[string]any{"id": tc.ID, "name": tc.Function.Name, "error": err.Error()})
@@ -534,8 +553,11 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 		if len(resp.ToolCalls) > 0 {
 			if turnHadCapableTool {
 				unproductive = 0
+				failedArgsWindow = nil
 			} else {
 				unproductive++
+
+				failedArgsWindow = append(failedArgsWindow, turnFailedArgs)
 
 				thr := cfg.IncapableThreshold
 				if thr <= 0 {
@@ -543,13 +565,22 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 				}
 
 				if unproductive >= thr {
-					emit.Emit(events.ErrorKind, map[string]any{
-						"error": "model cannot drive the tool loop",
-						"model": res.ModelUsed,
-					})
+					pattern, detail := classifyIncapable(failedArgsWindow)
+
+					errData := map[string]any{
+						"error":           "model cannot drive the tool loop",
+						"model_used":      res.ModelUsed,
+						"model_requested": cfg.Model,
+					}
+					if pattern != "" {
+						errData["suspected_upstream_defect"] = pattern
+					}
+
+					emit.Emit(events.ErrorKind, errData)
 
 					if cfg.Interactive {
 						unproductive = 0
+						failedArgsWindow = nil
 
 						// A human interjection drained mid-batch is the recovery input -
 						// deliver it instead of blocking awaitNext for a brand-new message
@@ -583,6 +614,7 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 					}
 
 					res.Reason = ReasonIncapable
+					res.IncapableDetail = detail
 
 					return res, nil
 				}

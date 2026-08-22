@@ -116,6 +116,7 @@ func TestInteractiveIncapableRecovery(t *testing.T) {
 	assert.NotEqual(t, ReasonIncapable, res.Reason, "interactive=true must not terminate with incapable")
 	assert.True(t, res.Completed)
 	assert.Equal(t, "done", res.Reason)
+	assert.Empty(t, res.IncapableDetail)
 
 	// The error event for "model cannot drive the tool loop" must be emitted.
 	evs := parseEvents(t, transcript.String())
