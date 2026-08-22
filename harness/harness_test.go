@@ -1064,6 +1064,121 @@ func TestRunDetectsIncapability(t *testing.T) {
 	assert.Less(t, res.Turns, 20, "incapable must fire before MaxTurns")
 }
 
+// TestRunDetectsIncapability_ConcatenatedWindow asserts that when every failed
+// turn's arguments are concatenated JSON objects, the classifier verdict lands
+// on both Result.IncapableDetail and the error event.
+func TestRunDetectsIncapability_ConcatenatedWindow(t *testing.T) {
+	reg := tools.NewRegistry(tools.NewReadTool(t.TempDir()))
+
+	badCall := toolCall("1", "read", `{"a":1}{"a":1}`)
+	responses := []llm.Response{
+		{Model: "gw/gpt-x-actual", ToolCalls: []llm.ToolCall{badCall}},
+		{Model: "gw/gpt-x-actual", ToolCalls: []llm.ToolCall{badCall}},
+		{Model: "gw/gpt-x-actual", ToolCalls: []llm.ToolCall{badCall}},
+	}
+
+	f := &fakeLLM{responses: responses}
+
+	var transcript bytes.Buffer
+
+	emit := events.NewEmitter(nil, &transcript)
+
+	res, err := Run(context.Background(), f, reg, emit, "do x",
+		Config{Model: "gw/gpt-x", MaxTurns: 20, IncapableThreshold: 3})
+	require.NoError(t, err)
+	assert.Equal(t, ReasonIncapable, res.Reason)
+	assert.Equal(t, detailConcatenatedObjects, res.IncapableDetail)
+
+	var sawEvent bool
+
+	for _, ev := range parseEvents(t, transcript.String()) {
+		if ev.Kind != events.ErrorKind {
+			continue
+		}
+
+		msg, ok := ev.Data["error"].(string)
+		if !ok || msg != "model cannot drive the tool loop" {
+			continue
+		}
+
+		sawEvent = true
+
+		assert.Equal(t, patternConcatenatedObjects, ev.Data["suspected_upstream_defect"])
+		assert.Equal(t, "gw/gpt-x", ev.Data["model_requested"])
+		assert.Equal(t, "gw/gpt-x-actual", ev.Data["model_used"])
+	}
+
+	assert.True(t, sawEvent, "error event for incapable must be emitted")
+}
+
+// TestRunDetectsIncapability_VaryingGarbageWindow asserts that a window of
+// genuinely differing malformed payloads yields no classifier verdict, on
+// either Result.IncapableDetail or the error event.
+func TestRunDetectsIncapability_VaryingGarbageWindow(t *testing.T) {
+	reg := tools.NewRegistry(tools.NewReadTool(t.TempDir()))
+
+	responses := []llm.Response{
+		{ToolCalls: []llm.ToolCall{toolCall("1", "read", `{ this is not json`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("2", "read", `{"path":`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("3", "read", `[1,2,3]`)}},
+	}
+
+	f := &fakeLLM{responses: responses}
+
+	var transcript bytes.Buffer
+
+	emit := events.NewEmitter(nil, &transcript)
+
+	res, err := Run(context.Background(), f, reg, emit, "do x",
+		Config{Model: "weak/m", MaxTurns: 20, IncapableThreshold: 3})
+	require.NoError(t, err)
+	assert.Equal(t, ReasonIncapable, res.Reason)
+	assert.Empty(t, res.IncapableDetail)
+
+	var sawEvent bool
+
+	for _, ev := range parseEvents(t, transcript.String()) {
+		if ev.Kind != events.ErrorKind {
+			continue
+		}
+
+		msg, ok := ev.Data["error"].(string)
+		if !ok || msg != "model cannot drive the tool loop" {
+			continue
+		}
+
+		sawEvent = true
+
+		_, hasDefect := ev.Data["suspected_upstream_defect"]
+		assert.False(t, hasDefect, "error event must not carry suspected_upstream_defect")
+	}
+
+	assert.True(t, sawEvent, "error event for incapable must be emitted")
+}
+
+// TestRunDetectsIncapability_RecoversBelowThreshold asserts that a single bad
+// turn followed by a productive turn resets the window and never trips the
+// incapable path - the window/reset lifecycle change must not alter threshold
+// behavior.
+func TestRunDetectsIncapability_RecoversBelowThreshold(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "f.txt"), []byte("data"), 0o644))
+	reg := tools.NewRegistry(tools.NewReadTool(root))
+
+	f := &fakeLLM{responses: []llm.Response{
+		{ToolCalls: []llm.ToolCall{toolCall("1", "read", `{"path":"f.txt"}{"path":"f.txt"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("2", "read", `{"path":"f.txt"}`)}},
+		{Content: "done", FinishReason: "stop"},
+	}}
+
+	res, err := Run(context.Background(), f, reg, newEmitter(), "do x",
+		Config{Model: "weak/m", MaxTurns: 10, IncapableThreshold: 3})
+	require.NoError(t, err)
+	assert.True(t, res.Completed)
+	assert.Equal(t, "done", res.Reason)
+	assert.Empty(t, res.IncapableDetail)
+}
+
 // pushOnStreamLLM pushes a human message into the inbox during the turn's stream
 // (after the top-of-turn drain), modelling an interjection that arrives while the
 // model is producing an all-unparseable, multi-tool-call turn.
