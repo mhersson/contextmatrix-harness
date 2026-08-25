@@ -47,8 +47,11 @@ func (w *burnLLM) SendStream(_ context.Context, req llm.Request, _ func(llm.Delt
 		return r, nil
 	}
 
+	// A distinct path per turn: the repeat guard would otherwise skip the second
+	// and later reads, which is correct behaviour but not what these tests measure.
 	return llm.Response{ToolCalls: []llm.ToolCall{
-		toolCall(fmt.Sprintf("c%d", len(w.requests)), "read", `{"path":"missing"}`),
+		toolCall(fmt.Sprintf("c%d", len(w.requests)), "read",
+			fmt.Sprintf(`{"path":"missing%d"}`, len(w.requests))),
 	}}, nil
 }
 

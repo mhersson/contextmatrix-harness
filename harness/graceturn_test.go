@@ -61,9 +61,9 @@ func TestGraceTurnLandsTerminalCall(t *testing.T) {
 
 	// 3 burn turns, then the grace-call response is a finish call.
 	w := &burnLLM{responses: []llm.Response{
-		{ToolCalls: []llm.ToolCall{toolCall("1", "read", `{"path":"missing"}`)}},
-		{ToolCalls: []llm.ToolCall{toolCall("2", "read", `{"path":"missing"}`)}},
-		{ToolCalls: []llm.ToolCall{toolCall("3", "read", `{"path":"missing"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("1", "read", `{"path":"missing1"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("2", "read", `{"path":"missing2"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("3", "read", `{"path":"missing3"}`)}},
 		{ToolCalls: []llm.ToolCall{toolCall("4", "finish", `{"commit_message":"done"}`)}},
 	}}
 
@@ -95,9 +95,9 @@ func TestGraceTurnCacheBucketsAccumulate(t *testing.T) {
 
 	// 3 burn turns (no usage), then the grace call lands with cache detail.
 	w := &burnLLM{responses: []llm.Response{
-		{ToolCalls: []llm.ToolCall{toolCall("1", "read", `{"path":"missing"}`)}},
-		{ToolCalls: []llm.ToolCall{toolCall("2", "read", `{"path":"missing"}`)}},
-		{ToolCalls: []llm.ToolCall{toolCall("3", "read", `{"path":"missing"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("1", "read", `{"path":"missing1"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("2", "read", `{"path":"missing2"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("3", "read", `{"path":"missing3"}`)}},
 		{
 			ToolCalls: []llm.ToolCall{toolCall("4", "finish", `{"commit_message":"done"}`)},
 			Usage: llm.Usage{
@@ -123,9 +123,9 @@ func TestGraceTurnToolChoiceRequiredWithMultipleTerminals(t *testing.T) {
 	reg := tools.NewRegistry(tools.NewReadTool(t.TempDir()), fin, other)
 
 	w := &burnLLM{responses: []llm.Response{
-		{ToolCalls: []llm.ToolCall{toolCall("1", "read", `{"path":"missing"}`)}},
-		{ToolCalls: []llm.ToolCall{toolCall("2", "read", `{"path":"missing"}`)}},
-		{ToolCalls: []llm.ToolCall{toolCall("3", "read", `{"path":"missing"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("1", "read", `{"path":"missing1"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("2", "read", `{"path":"missing2"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("3", "read", `{"path":"missing3"}`)}},
 		{ToolCalls: []llm.ToolCall{toolCall("4", "finish", `{"commit_message":"done"}`)}},
 	}}
 
@@ -146,9 +146,9 @@ func TestGraceTurnToolChoiceFallbackOn400(t *testing.T) {
 	w := &burnLLM{
 		errs: []error{nil, nil, nil, errors.New("llm endpoint status 400: bad tool_choice")},
 		responses: []llm.Response{
-			{ToolCalls: []llm.ToolCall{toolCall("1", "read", `{"path":"missing"}`)}},
-			{ToolCalls: []llm.ToolCall{toolCall("2", "read", `{"path":"missing"}`)}},
-			{ToolCalls: []llm.ToolCall{toolCall("3", "read", `{"path":"missing"}`)}},
+			{ToolCalls: []llm.ToolCall{toolCall("1", "read", `{"path":"missing1"}`)}},
+			{ToolCalls: []llm.ToolCall{toolCall("2", "read", `{"path":"missing2"}`)}},
+			{ToolCalls: []llm.ToolCall{toolCall("3", "read", `{"path":"missing3"}`)}},
 			{ToolCalls: []llm.ToolCall{toolCall("4", "finish", `{"commit_message":"done"}`)}},
 		},
 	}
@@ -190,9 +190,9 @@ func TestGraceTurnFallbackRetryDeclinedStaysMaxTurns(t *testing.T) {
 	w := &burnLLM{
 		errs: []error{nil, nil, nil, errors.New("llm endpoint status 400: bad tool_choice")},
 		responses: []llm.Response{
-			{ToolCalls: []llm.ToolCall{toolCall("1", "read", `{"path":"missing"}`)}},
-			{ToolCalls: []llm.ToolCall{toolCall("2", "read", `{"path":"missing"}`)}},
-			{ToolCalls: []llm.ToolCall{toolCall("3", "read", `{"path":"missing"}`)}},
+			{ToolCalls: []llm.ToolCall{toolCall("1", "read", `{"path":"missing1"}`)}},
+			{ToolCalls: []llm.ToolCall{toolCall("2", "read", `{"path":"missing2"}`)}},
+			{ToolCalls: []llm.ToolCall{toolCall("3", "read", `{"path":"missing3"}`)}},
 			{FinishReason: "stop"}, // the retry succeeds transport-wise but declines with prose
 		},
 	}
@@ -213,9 +213,9 @@ func TestGraceTurnDeclinedStaysMaxTurns(t *testing.T) {
 	fin := &graceFinishTool{}
 	reg := tools.NewRegistry(tools.NewReadTool(t.TempDir()), fin)
 	w := &burnLLM{responses: []llm.Response{
-		{ToolCalls: []llm.ToolCall{toolCall("1", "read", `{"path":"missing"}`)}},
-		{ToolCalls: []llm.ToolCall{toolCall("2", "read", `{"path":"missing"}`)}},
-		{ToolCalls: []llm.ToolCall{toolCall("3", "read", `{"path":"missing"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("1", "read", `{"path":"missing1"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("2", "read", `{"path":"missing2"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("3", "read", `{"path":"missing3"}`)}},
 		{FinishReason: "stop"}, // grace call answers with prose, no tool call
 	}}
 
@@ -241,9 +241,9 @@ func TestGraceTurnEmitsToolCallAndToolResult(t *testing.T) {
 	reg := tools.NewRegistry(tools.NewReadTool(t.TempDir()), fin)
 
 	w := &burnLLM{responses: []llm.Response{
-		{ToolCalls: []llm.ToolCall{toolCall("1", "read", `{"path":"missing"}`)}},
-		{ToolCalls: []llm.ToolCall{toolCall("2", "read", `{"path":"missing"}`)}},
-		{ToolCalls: []llm.ToolCall{toolCall("3", "read", `{"path":"missing"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("1", "read", `{"path":"missing1"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("2", "read", `{"path":"missing2"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("3", "read", `{"path":"missing3"}`)}},
 		{ToolCalls: []llm.ToolCall{toolCall("4", "finish", `{"commit_message":"done"}`)}},
 	}}
 
@@ -300,9 +300,9 @@ func TestGraceTurnToolCallRedactedArgs(t *testing.T) {
 	reg := tools.NewRegistry(tools.NewReadTool(t.TempDir()), fin)
 
 	w := &burnLLM{responses: []llm.Response{
-		{ToolCalls: []llm.ToolCall{toolCall("1", "read", `{"path":"missing"}`)}},
-		{ToolCalls: []llm.ToolCall{toolCall("2", "read", `{"path":"missing"}`)}},
-		{ToolCalls: []llm.ToolCall{toolCall("3", "read", `{"path":"missing"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("1", "read", `{"path":"missing1"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("2", "read", `{"path":"missing2"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("3", "read", `{"path":"missing3"}`)}},
 		{ToolCalls: []llm.ToolCall{toolCall("4", "finish", `{"commit_message":"done"}`)}},
 	}}
 
@@ -344,9 +344,9 @@ func TestGraceTurnToolCallCountIncludesGraceCall(t *testing.T) {
 	reg := tools.NewRegistry(tools.NewReadTool(t.TempDir()), fin)
 
 	w := &burnLLM{responses: []llm.Response{
-		{ToolCalls: []llm.ToolCall{toolCall("1", "read", `{"path":"missing"}`)}},
-		{ToolCalls: []llm.ToolCall{toolCall("2", "read", `{"path":"missing"}`)}},
-		{ToolCalls: []llm.ToolCall{toolCall("3", "read", `{"path":"missing"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("1", "read", `{"path":"missing1"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("2", "read", `{"path":"missing2"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("3", "read", `{"path":"missing3"}`)}},
 		{ToolCalls: []llm.ToolCall{toolCall("4", "finish", `{"commit_message":"done"}`)}},
 	}}
 
@@ -364,9 +364,9 @@ func TestGraceTurnFailingTerminalToolEmitsErrorResult(t *testing.T) {
 	reg := tools.NewRegistry(tools.NewReadTool(t.TempDir()), fin)
 
 	w := &burnLLM{responses: []llm.Response{
-		{ToolCalls: []llm.ToolCall{toolCall("1", "read", `{"path":"missing"}`)}},
-		{ToolCalls: []llm.ToolCall{toolCall("2", "read", `{"path":"missing"}`)}},
-		{ToolCalls: []llm.ToolCall{toolCall("3", "read", `{"path":"missing"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("1", "read", `{"path":"missing1"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("2", "read", `{"path":"missing2"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("3", "read", `{"path":"missing3"}`)}},
 		{ToolCalls: []llm.ToolCall{toolCall("4", "finish", `{"commit_message":"done"}`)}},
 	}}
 
@@ -403,9 +403,9 @@ func TestGraceTurnUsageEventCarriesCacheBuckets(t *testing.T) {
 	reg := tools.NewRegistry(tools.NewReadTool(t.TempDir()), fin)
 
 	w := &burnLLM{responses: []llm.Response{
-		{ToolCalls: []llm.ToolCall{toolCall("1", "read", `{"path":"missing"}`)}},
-		{ToolCalls: []llm.ToolCall{toolCall("2", "read", `{"path":"missing"}`)}},
-		{ToolCalls: []llm.ToolCall{toolCall("3", "read", `{"path":"missing"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("1", "read", `{"path":"missing1"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("2", "read", `{"path":"missing2"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("3", "read", `{"path":"missing3"}`)}},
 		{
 			ToolCalls: []llm.ToolCall{toolCall("4", "finish", `{"commit_message":"done"}`)},
 			Usage: llm.Usage{
