@@ -70,9 +70,34 @@ func graceFinish(ctx context.Context, client llm.LLM, reg *tools.Registry, emit 
 			continue
 		}
 
-		if _, execErr := tool.Execute(ctx, args); execErr != nil {
+		res.ToolCallCount++
+
+		emit.Emit(events.ToolCallKind, map[string]any{"id": tc.ID, "name": tc.Function.Name, "raw_args": redactStr(cfg, tc.Function.Arguments)})
+
+		out, execErr := tool.Execute(ctx, args)
+		if execErr != nil {
+			// Answer the call even though it failed: an unpaired tool_call is
+			// the asymmetry these events exist to remove.
+			res.ToolCallFailures++
+
+			em := fmt.Sprintf("tool error: %v", execErr)
+			if cfg.RedactToolOutput != nil {
+				em = cfg.RedactToolOutput(em)
+			}
+
+			em = tools.HeadTail(em, cfg.ToolOutputMaxBytes)
+			emit.Emit(events.ToolResult, map[string]any{"id": tc.ID, "error": em})
+
 			continue
 		}
+
+		text := out.Text
+		if cfg.RedactToolOutput != nil {
+			text = cfg.RedactToolOutput(text)
+		}
+
+		text = tools.HeadTail(text, cfg.ToolOutputMaxBytes)
+		emit.Emit(events.ToolResult, map[string]any{"id": tc.ID, "output_len": len(text)})
 
 		res.Completed = true
 		res.Reason = "done"
