@@ -638,17 +638,23 @@ func TestUnknownToolListsRegistered(t *testing.T) {
 	res, err := Run(context.Background(), f, reg, newEmitter(), "task", Config{MaxTurns: 10})
 	require.NoError(t, err)
 
-	var found bool
+	var msg string
 
 	for _, m := range res.Messages {
-		if m.Role == "tool" && strings.Contains(m.Content, "alpha") {
-			found = true
+		if m.Role == "tool" {
+			msg = m.Content
 
 			break
 		}
 	}
 
-	assert.True(t, found, "tool result message should contain at least one registered tool name")
+	require.NotEmpty(t, msg, "tool result message should exist")
+
+	assert.Contains(t, msg, "nosuch", "message should mention the unknown tool name")
+	assert.Contains(t, msg, "available tools:", "message should list available tools")
+	assert.Contains(t, msg, "alpha", "message should list alpha")
+	assert.Contains(t, msg, "beta", "message should list beta")
+	assert.Contains(t, msg, "gamma", "message should list gamma")
 }
 
 // capturingLLMSeq records all requests; scripted responses are returned in order.

@@ -68,7 +68,7 @@ func (t GrepTool) Execute(ctx context.Context, args map[string]any) (Result, err
 	if err != nil {
 		// rg exits 1 when there are no matches - not an error for us.
 		if ee, ok := err.(*exec.ExitError); ok && ee.ExitCode() == 1 {
-			return Result{Text: "no matches"}, nil
+			return Result{Text: grepEmptyMsg(pattern)}, nil
 		}
 
 		if _, lookErr := exec.LookPath("rg"); lookErr != nil {
@@ -79,6 +79,20 @@ func (t GrepTool) Execute(ctx context.Context, args map[string]any) (Result, err
 	}
 	// Strip the workspace root prefix for cleaner, portable output.
 	return Result{Text: capLines(strings.ReplaceAll(out, t.root+"/", ""), grepMaxLines)}, nil
+}
+
+// grepEmptyMsg returns "no matches" with an optional corrective note when the
+// pattern contains GNU BRE escapes that ripgrep interprets differently.
+func grepEmptyMsg(pattern string) string {
+	if strings.Contains(pattern, "\\|") ||
+		strings.Contains(pattern, "\\(") ||
+		strings.Contains(pattern, "\\)") ||
+		strings.Contains(pattern, "\\{") ||
+		strings.Contains(pattern, "\\+") {
+		return "no matches - note: grep uses ripgrep (Rust regex) syntax where a|b is alternation and \\| matches a literal pipe"
+	}
+
+	return "no matches"
 }
 
 // capLines keeps the first maxLines lines and replaces the rest with an
