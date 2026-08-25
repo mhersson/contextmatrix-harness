@@ -334,8 +334,10 @@ func TestBatchNudgeYieldsToWrapUp(t *testing.T) {
 		"and a run already told to finish is never later told to batch its reads")
 }
 
-// D4a: a call the repeat guard skipped is not a dispatched lookup, so it must
-// not advance the batching nudge's turn shape.
+// TestBatchNudgeIgnoresSkippedCalls pins that a call answered from the repeat
+// record does not count toward the nudge. It spent no round trip on a lookup,
+// and a model repeating one call is looping - telling it to batch misdiagnoses
+// it and spends the one-shot nudge on the wrong problem.
 func TestBatchNudgeIgnoresSkippedCalls(t *testing.T) {
 	look := &countingReadOnlyTool{name: "look"}
 

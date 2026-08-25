@@ -2033,9 +2033,11 @@ func TestRunCompactionUsageEventCarriesCacheBuckets(t *testing.T) {
 	assert.InDelta(t, 0.10, compactionEv.Data["cost_usd"], 0, "cost_usd must be preserved")
 }
 
-// D1: a second terminal call in one batch must not execute the terminal tool
-// again - tools.Terminal carries no idempotency contract, and in the agent the
-// terminal tool reports completion over MCP.
+// TestRunDuplicateTerminalCallExecutesOnce pins that a second terminal call in
+// one batch does not execute the terminal tool again. tools.Terminal carries no
+// idempotency contract, and a terminal tool typically reports completion
+// outward, so running it twice reports twice. Calls that are not terminal still
+// execute - dropping them silently is the defect this batch behaviour replaced.
 func TestRunDuplicateTerminalCallExecutesOnce(t *testing.T) {
 	fin := &finishTool{}
 	after := &countingTool{name: "after"}

@@ -227,8 +227,10 @@ func TestHumanInterjectionInvalidatesTheRepeatGuard(t *testing.T) {
 		"a human who says the file changed must not be answered from a skipped call")
 }
 
-// D3: a read-only call that FAILED must not be remembered as if it produced a
-// result - the retry would be told to use a result that never existed.
+// TestFailedReadOnlyCallIsNotCached pins that a call which errored is not
+// remembered as if it produced a result. The skip message asserts that nothing
+// could have changed the result and tells the model to use it - about a result
+// that never existed, in place of the tool's own corrective hint.
 func TestFailedReadOnlyCallIsNotCached(t *testing.T) {
 	look := &failingReadOnlyTool{}
 
@@ -263,8 +265,10 @@ func (f *failingReadOnlyTool) Execute(context.Context, map[string]any) (tools.Re
 }
 func (f *failingReadOnlyTool) ReadOnly() bool { return true }
 
-// D4b: an injected synthetic nudge is not human input and must not clear the
-// repeat guard.
+// TestNudgeDoesNotClearTheRepeatGuard pins that a message the harness wrote to
+// itself is not treated as human input. Only a human can have changed a file
+// out from under a recorded result; a nudge cannot, so it must not invalidate
+// the guard and hand the loop back to a repeating model.
 func TestNudgeDoesNotClearTheRepeatGuard(t *testing.T) {
 	look := &countingReadOnlyTool{name: "look"}
 	other := &countingReadOnlyTool{name: "other"}
