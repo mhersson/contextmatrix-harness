@@ -228,3 +228,143 @@ func TestGraceTurnSkippedWithoutTerminalTool(t *testing.T) {
 	assert.Equal(t, "max_turns", res.Reason)
 	assert.Len(t, w.requests, 3, "no grace call without a terminal tool")
 }
+
+func TestGraceTurnEmitsToolCallAndToolResult(t *testing.T) {
+	fin := &graceFinishTool{}
+	reg := tools.NewRegistry(tools.NewReadTool(t.TempDir()), fin)
+
+	w := &burnLLM{responses: []llm.Response{
+		{ToolCalls: []llm.ToolCall{toolCall("1", "read", `{"path":"missing"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("2", "read", `{"path":"missing"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("3", "read", `{"path":"missing"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("4", "finish", `{"commit_message":"done"}`)}},
+	}}
+
+	var transcript bytes.Buffer
+
+	emit := events.NewEmitter(nil, &transcript)
+
+	res, err := Run(context.Background(), w, reg, emit, "task", Config{MaxTurns: 3, GraceTurn: true})
+	require.NoError(t, err)
+	require.True(t, res.Completed)
+
+	evs := parseEvents(t, transcript.String())
+	require.NotEmpty(t, evs)
+
+	// Find the grace-turn tool_call event (id "4").
+	var toolCallEv, toolResultEv, stateChangeEv *events.Event
+
+	for i, ev := range evs {
+		switch ev.Kind {
+		case events.ToolCallKind:
+			if ev.Data["id"] == "4" {
+				toolCallEv = &evs[i]
+			}
+		case events.ToolResult:
+			if ev.Data["id"] == "4" {
+				toolResultEv = &evs[i]
+			}
+		case events.StateChange:
+			if v, ok := ev.Data["via"]; ok && v == "grace_turn" {
+				stateChangeEv = &evs[i]
+			}
+		}
+	}
+
+	require.NotNil(t, toolCallEv, "tool_call event for the grace call must exist")
+	assert.Equal(t, "4", toolCallEv.Data["id"])
+	assert.Equal(t, "finish", toolCallEv.Data["name"])
+	assert.Contains(t, toolCallEv.Data, "raw_args")
+
+	require.NotNil(t, toolResultEv, "tool_result event for the grace call must exist")
+	assert.Equal(t, "4", toolResultEv.Data["id"])
+	assert.EqualValues(t, 2, toolResultEv.Data["output_len"], "output_len must be 2 (\"ok\")")
+
+	require.NotNil(t, stateChangeEv, "state_change event with via=grace_turn must exist")
+
+	// tool_call must appear before tool_result, which must appear before state_change.
+	callIdx := indexOfEvent(evs, toolCallEv)
+	resultIdx := indexOfEvent(evs, toolResultEv)
+	stateIdx := indexOfEvent(evs, stateChangeEv)
+
+	assert.Less(t, callIdx, resultIdx, "tool_call must precede tool_result")
+	assert.Less(t, resultIdx, stateIdx, "tool_result must precede state_change")
+
+	assert.GreaterOrEqual(t, res.ToolCallCount, 1,
+		"ToolCallCount must be at least 1 (the grace call)")
+}
+
+func TestGraceTurnToolCallRedactedArgs(t *testing.T) {
+	fin := &graceFinishTool{}
+	reg := tools.NewRegistry(tools.NewReadTool(t.TempDir()), fin)
+
+	w := &burnLLM{responses: []llm.Response{
+		{ToolCalls: []llm.ToolCall{toolCall("1", "read", `{"path":"missing"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("2", "read", `{"path":"missing"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("3", "read", `{"path":"missing"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("4", "finish", `{"commit_message":"done"}`)}},
+	}}
+
+	var transcript bytes.Buffer
+
+	emit := events.NewEmitter(nil, &transcript)
+
+	redact := func(s string) string {
+		return "<REDACTED>"
+	}
+
+	res, err := Run(context.Background(), w, reg, emit, "task", Config{
+		MaxTurns:         3,
+		GraceTurn:        true,
+		RedactToolOutput: redact,
+	})
+	require.NoError(t, err)
+	require.True(t, res.Completed)
+
+	evs := parseEvents(t, transcript.String())
+
+	var toolCallEv *events.Event
+
+	for i, ev := range evs {
+		if ev.Kind == events.ToolCallKind && ev.Data["id"] == "4" {
+			toolCallEv = &evs[i]
+
+			break
+		}
+	}
+
+	require.NotNil(t, toolCallEv, "tool_call event for the grace call must exist")
+	assert.Equal(t, "<REDACTED>", toolCallEv.Data["raw_args"],
+		"raw_args must be redacted when RedactToolOutput is configured")
+}
+
+// indexOfEvent returns the index of the event with the given seq in the slice.
+func indexOfEvent(evs []events.Event, ev *events.Event) int {
+	for i := range evs {
+		if evs[i].Seq == ev.Seq {
+			return i
+		}
+	}
+
+	return -1
+}
+
+func TestGraceTurnToolCallCountIncludesGraceCall(t *testing.T) {
+	fin := &graceFinishTool{}
+	reg := tools.NewRegistry(tools.NewReadTool(t.TempDir()), fin)
+
+	w := &burnLLM{responses: []llm.Response{
+		{ToolCalls: []llm.ToolCall{toolCall("1", "read", `{"path":"missing"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("2", "read", `{"path":"missing"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("3", "read", `{"path":"missing"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("4", "finish", `{"commit_message":"done"}`)}},
+	}}
+
+	res, err := Run(context.Background(), w, reg, newEmitter(), "task", Config{MaxTurns: 3, GraceTurn: true})
+	require.NoError(t, err)
+	require.True(t, res.Completed)
+
+	// 3 burn calls (one per turn) + 1 grace call = 4 total.
+	assert.Equal(t, 4, res.ToolCallCount,
+		"ToolCallCount must include the 3 burn calls plus the 1 grace call")
+}
