@@ -607,6 +607,56 @@ func TestRunTerminatingToolHonoredInInteractive(t *testing.T) {
 	assert.JSONEq(t, `{"commit_message":"x"}`, string(res.CompletionArgs))
 }
 
+// dummyTool is a minimal Tool implementation for testing unknown-tool errors.
+type dummyTool struct {
+	name string
+}
+
+func (d *dummyTool) Name() string { return d.name }
+
+func (d *dummyTool) Schema() llm.Tool {
+	return llm.Tool{Type: "function", Function: llm.ToolFunction{Name: d.name}}
+}
+
+func (d *dummyTool) Execute(_ context.Context, _ map[string]any) (tools.Result, error) {
+	return tools.Result{Text: "ok"}, nil
+}
+
+func TestUnknownToolListsRegistered(t *testing.T) {
+	t.Parallel()
+
+	reg := tools.NewRegistry(
+		&dummyTool{name: "alpha"},
+		&dummyTool{name: "beta"},
+		&dummyTool{name: "gamma"},
+	)
+
+	f := &fakeLLM{responses: []llm.Response{
+		{ToolCalls: []llm.ToolCall{toolCall("1", "nosuch", `{}`)}},
+	}}
+
+	res, err := Run(context.Background(), f, reg, newEmitter(), "task", Config{MaxTurns: 10})
+	require.NoError(t, err)
+
+	var msg string
+
+	for _, m := range res.Messages {
+		if m.Role == "tool" {
+			msg = m.Content
+
+			break
+		}
+	}
+
+	require.NotEmpty(t, msg, "tool result message should exist")
+
+	assert.Contains(t, msg, "nosuch", "message should mention the unknown tool name")
+	assert.Contains(t, msg, "available tools:", "message should list available tools")
+	assert.Contains(t, msg, "alpha", "message should list alpha")
+	assert.Contains(t, msg, "beta", "message should list beta")
+	assert.Contains(t, msg, "gamma", "message should list gamma")
+}
+
 // capturingLLMSeq records all requests; scripted responses are returned in order.
 type capturingLLMSeq struct {
 	responses []llm.Response

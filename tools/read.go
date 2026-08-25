@@ -59,7 +59,7 @@ func (t ReadTool) Schema() llm.Tool {
 }
 
 func (t ReadTool) Execute(_ context.Context, args map[string]any) (Result, error) {
-	rel, err := requireString(args, "path")
+	rel, err := requireString(args, t.Name(), "path", "file path relative to the workspace root")
 	if err != nil {
 		return Result{}, err
 	}

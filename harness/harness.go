@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/mhersson/contextmatrix-harness/events"
 	"github.com/mhersson/contextmatrix-harness/llm"
@@ -470,6 +471,16 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 				tool, ok := reg.Get(tc.Function.Name)
 				if !ok {
 					msg := fmt.Sprintf("unknown tool %q", tc.Function.Name)
+
+					if all := reg.All(); len(all) > 0 {
+						names := make([]string, 0, len(all))
+						for _, t := range all {
+							names = append(names, t.Name())
+						}
+
+						msg += "; available tools: " + strings.Join(names, ", ")
+					}
+
 					res.ToolCallFailures++
 
 					msgs = append(msgs, toolResultMsg(tc.ID, msg))

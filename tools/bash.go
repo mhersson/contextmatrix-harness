@@ -68,7 +68,7 @@ func (t BashTool) Schema() llm.Tool {
 }
 
 func (t BashTool) Execute(ctx context.Context, args map[string]any) (Result, error) {
-	command, err := requireString(args, "command")
+	command, err := requireString(args, t.Name(), "command", "the shell command to run")
 	if err != nil {
 		return Result{}, err
 	}

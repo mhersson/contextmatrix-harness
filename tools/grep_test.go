@@ -45,6 +45,35 @@ func TestGrepToolDashPattern(t *testing.T) {
 	assert.Contains(t, out.Text, "a-b-c")
 }
 
+func TestGrepEmptyWithBRE(t *testing.T) {
+	if _, err := exec.LookPath("rg"); err != nil {
+		t.Skip("ripgrep (rg) not installed")
+	}
+
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "test.txt"), []byte("hello world\n"), 0o644))
+
+	// Pattern a\|b uses GNU BRE alternation; in ripgrep \| matches a literal pipe.
+	out, err := NewGrepTool(root).Execute(context.Background(), map[string]any{"pattern": `a\|b`})
+	require.NoError(t, err)
+	assert.Contains(t, out.Text, "no matches")
+	assert.Contains(t, out.Text, "ripgrep (Rust regex)")
+	assert.Contains(t, out.Text, "alternation")
+}
+
+func TestGrepEmptyPlain(t *testing.T) {
+	if _, err := exec.LookPath("rg"); err != nil {
+		t.Skip("ripgrep (rg) not installed")
+	}
+
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "test.txt"), []byte("hello world\n"), 0o644))
+
+	out, err := NewGrepTool(root).Execute(context.Background(), map[string]any{"pattern": "zzzz"})
+	require.NoError(t, err)
+	assert.Equal(t, "no matches", out.Text)
+}
+
 func TestGrepCapsOutputLines(t *testing.T) {
 	if _, err := exec.LookPath("rg"); err != nil {
 		t.Skip("ripgrep (rg) not installed")

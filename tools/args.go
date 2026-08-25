@@ -2,19 +2,56 @@ package tools
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 )
 
-func requireString(args map[string]any, key string) (string, error) {
+// receivedArgs formats the arguments a failing call did carry: key names with
+// byte lengths for strings and Go types for anything else, never values. Keys
+// are sorted so two identical failures produce the same message.
+func receivedArgs(args map[string]any) string {
+	if len(args) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString("; received: ")
+
+	for i, k := range slices.Sorted(maps.Keys(args)) {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+
+		s, ok := args[k].(string)
+		if ok {
+			fmt.Fprintf(&b, "%s (%d B)", k, len(s))
+		} else {
+			fmt.Fprintf(&b, "%s (%T)", k, args[k])
+		}
+	}
+
+	return b.String()
+}
+
+func missingArgError(toolName, key, purpose string, args map[string]any) error {
+	return fmt.Errorf("tool %q: missing required argument %q (%s)%s", toolName, key, purpose, receivedArgs(args))
+}
+
+func wrongTypeArgError(toolName, key string, args map[string]any) error {
+	return fmt.Errorf("tool %q: argument %q must be a string%s", toolName, key, receivedArgs(args))
+}
+
+func requireString(args map[string]any, toolName, key, purpose string) (string, error) {
 	v, ok := args[key]
 	if !ok {
-		return "", fmt.Errorf("missing required argument %q", key)
+		return "", missingArgError(toolName, key, purpose, args)
 	}
 
 	s, ok := v.(string)
 	if !ok {
-		return "", fmt.Errorf("argument %q must be a string", key)
+		return "", wrongTypeArgError(toolName, key, args)
 	}
 
 	return s, nil
