@@ -33,12 +33,12 @@ func (t WriteTool) Schema() llm.Tool {
 }
 
 func (t WriteTool) Execute(_ context.Context, args map[string]any) (Result, error) {
-	rel, err := requireString(args, "path")
+	rel, err := requireString(args, t.Name(), "path", "file path relative to the workspace root")
 	if err != nil {
 		return Result{}, err
 	}
 
-	content, err := requireString(args, "content")
+	content, err := requireString(args, t.Name(), "content", "the full new file content")
 	if err != nil {
 		return Result{}, err
 	}

@@ -35,12 +35,12 @@ func (t EditTool) Schema() llm.Tool {
 }
 
 func (t EditTool) Execute(_ context.Context, args map[string]any) (Result, error) {
-	rel, err := requireString(args, "path")
+	rel, err := requireString(args, t.Name(), "path", "file path relative to the workspace root")
 	if err != nil {
 		return Result{}, err
 	}
 
-	oldStr, err := requireString(args, "old_string")
+	oldStr, err := requireString(args, t.Name(), "old_string", "exact text to replace; must be non-empty")
 	if err != nil {
 		return Result{}, err
 	}
@@ -49,7 +49,7 @@ func (t EditTool) Execute(_ context.Context, args map[string]any) (Result, error
 		return Result{}, errors.New("old_string must be non-empty; use the write tool to create or overwrite file content")
 	}
 
-	newStr, err := requireString(args, "new_string")
+	newStr, err := requireString(args, t.Name(), "new_string", "replacement text")
 	if err != nil {
 		return Result{}, err
 	}

@@ -38,7 +38,7 @@ func (t GitTool) Schema() llm.Tool {
 }
 
 func (t GitTool) Execute(ctx context.Context, args map[string]any) (Result, error) {
-	sub, err := requireString(args, "subcommand")
+	sub, err := requireString(args, t.Name(), "subcommand", "read-only git subcommand")
 	if err != nil {
 		return Result{}, err
 	}

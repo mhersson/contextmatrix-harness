@@ -38,7 +38,7 @@ func (t GrepTool) Schema() llm.Tool {
 const grepMaxLines = 200
 
 func (t GrepTool) Execute(ctx context.Context, args map[string]any) (Result, error) {
-	pattern, err := requireString(args, "pattern")
+	pattern, err := requireString(args, t.Name(), "pattern", "regular expression to search for")
 	if err != nil {
 		return Result{}, err
 	}

@@ -6,15 +6,53 @@ import (
 	"strings"
 )
 
-func requireString(args map[string]any, key string) (string, error) {
+// echolessArgs is called by both missingArgError and wrongTypeArgError to format
+// the received arguments. It is separated so the echo formatting is tested through
+// the exported requireString function rather than tested independently.
+func echolessArgs(args map[string]any) string {
+	if len(args) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString("; received: ")
+
+	first := true
+	for k, v := range args {
+		if !first {
+			b.WriteString(", ")
+		}
+
+		first = false
+
+		s, ok := v.(string)
+		if ok {
+			fmt.Fprintf(&b, "%s (%d B)", k, len(s))
+		} else {
+			fmt.Fprintf(&b, "%s (%T)", k, v)
+		}
+	}
+
+	return b.String()
+}
+
+func missingArgError(toolName, key, purpose string, args map[string]any) error {
+	return fmt.Errorf("tool %q: missing required argument %q (%s)%s", toolName, key, purpose, echolessArgs(args))
+}
+
+func wrongTypeArgError(toolName, key string, args map[string]any) error {
+	return fmt.Errorf("tool %q: argument %q must be a string%s", toolName, key, echolessArgs(args))
+}
+
+func requireString(args map[string]any, toolName, key, purpose string) (string, error) {
 	v, ok := args[key]
 	if !ok {
-		return "", fmt.Errorf("missing required argument %q", key)
+		return "", missingArgError(toolName, key, purpose, args)
 	}
 
 	s, ok := v.(string)
 	if !ok {
-		return "", fmt.Errorf("argument %q must be a string", key)
+		return "", wrongTypeArgError(toolName, key, args)
 	}
 
 	return s, nil

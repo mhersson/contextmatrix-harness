@@ -61,7 +61,7 @@ func (t GlobTool) Schema() llm.Tool {
 }
 
 func (t GlobTool) Execute(ctx context.Context, args map[string]any) (Result, error) {
-	pattern, err := requireString(args, "pattern")
+	pattern, err := requireString(args, t.Name(), "pattern", "glob pattern matched against the path relative to the search root")
 	if err != nil {
 		return Result{}, err
 	}
