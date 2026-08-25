@@ -309,6 +309,7 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 		emit.Emit(events.UsageKind, map[string]any{
 			"prompt_tokens": resp.Usage.PromptTokens, "completion_tokens": resp.Usage.CompletionTokens,
 			"cost_usd": resp.Usage.Cost, "model": cfg.Model,
+			"cache_read_tokens": cacheRead, "cache_creation_tokens": cacheCreation,
 		})
 
 		if cfg.ContextWindow > 0 {
@@ -330,6 +331,7 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 						emit.Emit(events.UsageKind, map[string]any{
 							"prompt_tokens": cUsage.PromptTokens, "completion_tokens": cUsage.CompletionTokens,
 							"cost_usd": cUsage.Cost, "model": cfg.Model, "phase": "compaction",
+							"cache_read_tokens": cCacheRead, "cache_creation_tokens": cCacheCreation,
 						})
 					}
 

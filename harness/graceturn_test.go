@@ -397,3 +397,56 @@ func TestGraceTurnFailingTerminalToolEmitsErrorResult(t *testing.T) {
 	assert.Contains(t, evs[resultIdx].Data, "error")
 	assert.Contains(t, evs[resultIdx].Data["error"], "boom")
 }
+
+func TestGraceTurnUsageEventCarriesCacheBuckets(t *testing.T) {
+	fin := &graceFinishTool{}
+	reg := tools.NewRegistry(tools.NewReadTool(t.TempDir()), fin)
+
+	w := &burnLLM{responses: []llm.Response{
+		{ToolCalls: []llm.ToolCall{toolCall("1", "read", `{"path":"missing"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("2", "read", `{"path":"missing"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("3", "read", `{"path":"missing"}`)}},
+		{
+			ToolCalls: []llm.ToolCall{toolCall("4", "finish", `{"commit_message":"done"}`)},
+			Usage: llm.Usage{
+				PromptTokens: 100, CompletionTokens: 20, Cost: 0.5,
+				PromptTokensDetails:      &llm.PromptTokensDetails{CachedTokens: 60},
+				CacheCreationInputTokens: 8,
+			},
+		},
+	}}
+
+	var transcript bytes.Buffer
+
+	emit := events.NewEmitter(nil, &transcript)
+
+	res, err := Run(context.Background(), w, reg, emit, "task", Config{MaxTurns: 3, GraceTurn: true})
+	require.NoError(t, err)
+	require.True(t, res.Completed)
+
+	evs := parseEvents(t, transcript.String())
+
+	// Locate the usage event that carries the cache fields (the grace call's).
+	var graceUsageEv *events.Event
+
+	for i, ev := range evs {
+		if ev.Kind == events.UsageKind {
+			if cr, ok := ev.Data["cache_read_tokens"]; ok && cr != float64(0) {
+				graceUsageEv = &evs[i]
+
+				break
+			}
+		}
+	}
+
+	require.NotNil(t, graceUsageEv, "must have a usage event with non-zero cache_read_tokens")
+
+	// The grace-call usage event must carry both cache fields.
+	assert.InDelta(t, 60.0, graceUsageEv.Data["cache_read_tokens"], 0, "cache_read_tokens must match")
+	assert.InDelta(t, 8.0, graceUsageEv.Data["cache_creation_tokens"], 0, "cache_creation_tokens must match")
+
+	// Pre-existing keys must be unchanged.
+	assert.InDelta(t, 100.0, graceUsageEv.Data["prompt_tokens"], 0, "prompt_tokens must be preserved")
+	assert.InDelta(t, 20.0, graceUsageEv.Data["completion_tokens"], 0, "completion_tokens must be preserved")
+	assert.InDelta(t, 0.5, graceUsageEv.Data["cost_usd"], 0, "cost_usd must be preserved")
+}
