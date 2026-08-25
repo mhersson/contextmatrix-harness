@@ -33,7 +33,10 @@ func looksBinary(p []byte) bool {
 	return bytes.IndexByte(p, 0) >= 0
 }
 
-type ReadTool struct{ root string }
+type ReadTool struct {
+	root      string
+	readRoots []string
+}
 
 func NewReadTool(root string) ReadTool { return ReadTool{root: root} }
 
@@ -64,7 +67,7 @@ func (t ReadTool) Execute(_ context.Context, args map[string]any) (Result, error
 		return Result{}, err
 	}
 
-	abs, err := resolveInRoot(t.root, rel)
+	abs, err := resolveInRoots(t.roots(), rel)
 	if err != nil {
 		return Result{}, err
 	}
@@ -222,3 +225,21 @@ func (t ReadTool) Execute(_ context.Context, args map[string]any) (Result, error
 
 // ReadOnly marks read as side-effect-free: see tools.ReadOnly.
 func (t ReadTool) ReadOnly() bool { return true }
+
+// WithReadRoots returns a copy that may also read inside the given trees, in
+// addition to the workspace. Roots are caller-supplied configuration - never a
+// tool argument - and are filtered by sanitizeReadRoots, so a root that would
+// widen past the workspace is dropped. With no roots the tool behaves exactly
+// as before. Only the search path resolves against them: with no path argument
+// the tool still works from the workspace root.
+func (t ReadTool) WithReadRoots(roots []string) ReadTool {
+	t.readRoots = sanitizeReadRoots(t.root, roots)
+
+	return t
+}
+
+// roots is the ordered permitted set: the workspace first, then any extra
+// read-only roots.
+func (t ReadTool) roots() []string {
+	return append([]string{t.root}, t.readRoots...)
+}

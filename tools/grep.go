@@ -10,7 +10,10 @@ import (
 	"github.com/mhersson/contextmatrix-harness/llm"
 )
 
-type GrepTool struct{ root string }
+type GrepTool struct {
+	root      string
+	readRoots []string
+}
 
 func NewGrepTool(root string) GrepTool { return GrepTool{root: root} }
 
@@ -45,7 +48,7 @@ func (t GrepTool) Execute(ctx context.Context, args map[string]any) (Result, err
 
 	searchPath := t.root
 	if rel := optString(args, "path", ""); rel != "" {
-		abs, err := resolveInRoot(t.root, rel)
+		abs, err := resolveInRoots(t.roots(), rel)
 		if err != nil {
 			return Result{}, err
 		}
@@ -111,3 +114,21 @@ func capLines(s string, maxLines int) string {
 
 // ReadOnly marks grep as side-effect-free: see tools.ReadOnly.
 func (t GrepTool) ReadOnly() bool { return true }
+
+// WithReadRoots returns a copy that may also read inside the given trees, in
+// addition to the workspace. Roots are caller-supplied configuration - never a
+// tool argument - and are filtered by sanitizeReadRoots, so a root that would
+// widen past the workspace is dropped. With no roots the tool behaves exactly
+// as before. Only the search path resolves against them: with no path argument
+// the tool still works from the workspace root.
+func (t GrepTool) WithReadRoots(roots []string) GrepTool {
+	t.readRoots = sanitizeReadRoots(t.root, roots)
+
+	return t
+}
+
+// roots is the ordered permitted set: the workspace first, then any extra
+// read-only roots.
+func (t GrepTool) roots() []string {
+	return append([]string{t.root}, t.readRoots...)
+}
