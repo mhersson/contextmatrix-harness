@@ -158,8 +158,8 @@ func TestRepeatedBashCallsAlwaysExecute(t *testing.T) {
 	reg := tools.NewRegistry(tools.NewBashTool(t.TempDir()))
 
 	f := &fakeLLM{responses: []llm.Response{
-		{ToolCalls: []llm.ToolCall{toolCall("1", "bash", `{"command":"echo hi"}`)}},
-		{ToolCalls: []llm.ToolCall{toolCall("2", "bash", `{"command":"echo hi"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("1", "bash", `{"command":"echo RAN-THE-COMMAND"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("2", "bash", `{"command":"echo RAN-THE-COMMAND"}`)}},
 		{Content: "done", FinishReason: "stop"},
 	}}
 
@@ -169,8 +169,11 @@ func TestRepeatedBashCallsAlwaysExecute(t *testing.T) {
 	results := toolResults(res.Messages)
 	require.Len(t, results, 2)
 
+	// An exact match, not a substring: the skip message happens to contain
+	// several short words, and a loose assertion here could not fail.
 	for i, r := range results {
-		assert.Contains(t, r, "hi", "bash call %d must actually run: re-running a check after an edit is correct, not waste", i+1)
+		assert.Equal(t, "RAN-THE-COMMAND\n", r,
+			"bash call %d must actually run: re-running a check after an edit is correct, not waste", i+1)
 	}
 }
 

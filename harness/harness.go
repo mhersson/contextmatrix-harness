@@ -253,10 +253,15 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 		// the mid-batch drain, the await-input recovery and the no-tool-call
 		// branch alike. A human who says a file changed must not be answered
 		// from a skipped call.
-		if n := humanTurns(msgs); n != humanMsgs {
+		//
+		// Growth only: compaction REMOVES user messages, and its own reset below
+		// owns that case - counting a decrease here would hide it.
+		if n := humanTurns(msgs); n > humanMsgs {
 			humanMsgs = n
 
 			clear(repeated)
+		} else {
+			humanMsgs = n
 		}
 
 		if !cfg.Interactive && cfg.WrapUpTurns > 0 && !nudged &&
