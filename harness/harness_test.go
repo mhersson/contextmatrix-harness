@@ -1887,3 +1887,148 @@ func TestRunExportsMessagesOnMaxTurns(t *testing.T) {
 	require.Equal(t, "max_turns", res.Reason)
 	assert.NotEmpty(t, res.Messages, "messages must be exported on budget stops too")
 }
+
+// findUsageEvent locates the first usage event in the parsed transcript.
+// Returns nil when none is found.
+func findUsageEvent(evs []events.Event) *events.Event {
+	for i, ev := range evs {
+		if ev.Kind == events.UsageKind {
+			return &evs[i]
+		}
+	}
+
+	return nil
+}
+
+func TestRunUsageEventCarriesCacheBuckets_CachedTokens(t *testing.T) {
+	// OpenAI-style nested cached_tokens shape.
+	f := &fakeLLM{responses: []llm.Response{
+		{
+			Content:      "done",
+			FinishReason: "stop",
+			Usage: llm.Usage{
+				PromptTokens: 100, CompletionTokens: 10, Cost: 0.5,
+				PromptTokensDetails:      &llm.PromptTokensDetails{CachedTokens: 80},
+				CacheCreationInputTokens: 7,
+			},
+		},
+	}}
+
+	var transcript bytes.Buffer
+
+	emit := events.NewEmitter(nil, &transcript)
+
+	_, err := Run(context.Background(), f, tools.NewRegistry(), emit, "task", Config{MaxTurns: 10, Model: "test-model"})
+	require.NoError(t, err)
+
+	evs := parseEvents(t, transcript.String())
+	usageEv := findUsageEvent(evs)
+	require.NotNil(t, usageEv, "must have a usage event")
+
+	// Cache fields must be present.
+	assert.InDelta(t, 80.0, usageEv.Data["cache_read_tokens"], 0, "cache_read_tokens must match")
+	assert.InDelta(t, 7.0, usageEv.Data["cache_creation_tokens"], 0, "cache_creation_tokens must match")
+
+	// The three token fields are disjoint, matching Result and what the agent
+	// reports to the board: 80 of the 100 prompt tokens were a cache read.
+	assert.InDelta(t, 20.0, usageEv.Data["prompt_tokens"], 0, "prompt_tokens must exclude the cached portion")
+	assert.InDelta(t, 10.0, usageEv.Data["completion_tokens"], 0, "completion_tokens must be preserved")
+	assert.InDelta(t, 0.5, usageEv.Data["cost_usd"], 0, "cost_usd must be preserved")
+	assert.Equal(t, "test-model", usageEv.Data["model"], "model must be present and match")
+}
+
+func TestRunUsageEventCarriesCacheBuckets_Disjoint(t *testing.T) {
+	// Anthropic-shim disjoint cache bucket shape.
+	f := &fakeLLM{responses: []llm.Response{
+		{
+			Content:      "done",
+			FinishReason: "stop",
+			Usage: llm.Usage{
+				PromptTokens: 100, CompletionTokens: 10, Cost: 0.5,
+				CacheReadInputTokens:     200,
+				CacheCreationInputTokens: 15,
+			},
+		},
+	}}
+
+	var transcript bytes.Buffer
+
+	emit := events.NewEmitter(nil, &transcript)
+
+	_, err := Run(context.Background(), f, tools.NewRegistry(), emit, "task", Config{MaxTurns: 10, Model: "test-model"})
+	require.NoError(t, err)
+
+	evs := parseEvents(t, transcript.String())
+	usageEv := findUsageEvent(evs)
+	require.NotNil(t, usageEv, "must have a usage event")
+
+	// Cache fields must be present.
+	assert.InDelta(t, 200.0, usageEv.Data["cache_read_tokens"], 0, "cache_read_tokens must match")
+	assert.InDelta(t, 15.0, usageEv.Data["cache_creation_tokens"], 0, "cache_creation_tokens must match")
+
+	// Already disjoint on the wire: the prompt count passes through untouched.
+	assert.InDelta(t, 100.0, usageEv.Data["prompt_tokens"], 0, "prompt_tokens must be preserved")
+	assert.InDelta(t, 10.0, usageEv.Data["completion_tokens"], 0, "completion_tokens must be preserved")
+	assert.InDelta(t, 0.5, usageEv.Data["cost_usd"], 0, "cost_usd must be preserved")
+	assert.Equal(t, "test-model", usageEv.Data["model"], "model must be present and match")
+}
+
+// TestRunCompactionUsageEventCarriesCacheBuckets covers the third emit site.
+// Compaction is where cache traffic matters most - it is the expensive
+// re-send - so the phase's own usage event must carry the buckets too.
+func TestRunCompactionUsageEventCarriesCacheBuckets(t *testing.T) {
+	history := make([]llm.Message, 20)
+	for i := range history {
+		if i%2 == 0 {
+			history[i] = llm.Message{Role: "user", Content: fmt.Sprintf("user %d", i)}
+		} else {
+			history[i] = llm.Message{Role: "assistant", Content: fmt.Sprintf("assistant %d", i)}
+		}
+	}
+
+	fake := &capturingLLMSeq{responses: []llm.Response{
+		{Content: "turn1", Usage: llm.Usage{PromptTokens: 900, Cost: 0.01}}, // triggers compaction
+		{
+			Content: "SUMMARY",
+			Usage: llm.Usage{
+				PromptTokens: 500, CompletionTokens: 20, Cost: 0.10,
+				PromptTokensDetails:      &llm.PromptTokensDetails{CachedTokens: 300},
+				CacheCreationInputTokens: 12,
+			},
+		},
+		{Content: "done", FinishReason: "stop"},
+	}}
+
+	var transcript bytes.Buffer
+
+	emit := events.NewEmitter(nil, &transcript)
+
+	_, err := Run(context.Background(), fake, tools.NewRegistry(), emit, "go", Config{
+		MaxTurns:      10,
+		Model:         "test-model",
+		ContextWindow: 1000,
+		Compaction:    &Compaction{Threshold: 0.85, KeepRecentTurns: 2},
+		History:       history,
+	})
+	require.NoError(t, err)
+
+	evs := parseEvents(t, transcript.String())
+
+	var compactionEv *events.Event
+
+	for i, ev := range evs {
+		if ev.Kind == events.UsageKind && ev.Data["phase"] == "compaction" {
+			compactionEv = &evs[i]
+
+			break
+		}
+	}
+
+	require.NotNil(t, compactionEv, "the compaction phase must emit its own usage event")
+
+	assert.InDelta(t, 300.0, compactionEv.Data["cache_read_tokens"], 0, "cache_read_tokens must match")
+	assert.InDelta(t, 12.0, compactionEv.Data["cache_creation_tokens"], 0, "cache_creation_tokens must match")
+	assert.InDelta(t, 200.0, compactionEv.Data["prompt_tokens"], 0, "prompt_tokens must exclude the cached portion")
+	assert.InDelta(t, 20.0, compactionEv.Data["completion_tokens"], 0, "completion_tokens must be preserved")
+	assert.InDelta(t, 0.10, compactionEv.Data["cost_usd"], 0, "cost_usd must be preserved")
+}
