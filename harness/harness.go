@@ -72,6 +72,19 @@ type Config struct {
 	// WrapUpMessage is the synthetic user message WrapUpTurns injects. Empty
 	// uses a built-in default that names the remaining turn count.
 	WrapUpMessage string
+	// BatchNudgeTurns, when > 0, injects BatchNudgeMessage as a synthetic user
+	// message exactly once, after that many consecutive turns have each spent a
+	// whole model call on a single call to a tools.ReadOnly tool. Any other turn
+	// shape resets the count. It suggests grouping; it never groups anything
+	// itself, so a model whose next lookup depends on this one can ignore it. Unlike WrapUpTurns this does not depend
+	// on the turn cap, so it applies in Interactive mode too. Zero (byte-identical
+	// to prior behavior) disables it, as does a wrap-up nudge having already
+	// fired: telling a model to batch its reads while it is being told to finish
+	// is contradictory.
+	BatchNudgeTurns int
+	// BatchNudgeMessage is the synthetic user message BatchNudgeTurns injects.
+	// Empty uses a built-in default that names the count.
+	BatchNudgeMessage string
 	// GraceTurn, when true, grants ONE extra model call after MaxTurns is
 	// exhausted (non-Interactive only), offering ONLY the registry's Terminal
 	// tools plus a synthetic user message demanding the terminal call. A model
@@ -208,6 +221,12 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 	// nudged guards the one-shot wrap-up injection.
 	nudged := false
 
+	// batchNudged guards the one-shot batching injection; singleBatchTurns counts
+	// the consecutive turns that each spent a whole model call on one read-only
+	// tool call. Any other turn shape resets it.
+	batchNudged := false
+	singleBatchTurns := 0
+
 	// MaxTurns>0 per-exchange backstop in interactive mode is deferred;
 	// chat uses MaxTurns=0 (unbounded). Non-interactive behavior is byte-identical.
 	for cfg.Interactive || res.Turns < cfg.MaxTurns {
@@ -232,6 +251,21 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 			msgs = append(msgs, llm.Message{Role: "user", Content: msg})
 
 			emit.Emit(events.StateChange, map[string]any{"event": "wrap_up_nudge", "turns_remaining": cfg.WrapUpTurns})
+		} else if cfg.BatchNudgeTurns > 0 && !batchNudged && !nudged &&
+			singleBatchTurns >= cfg.BatchNudgeTurns {
+			// !nudged, not just the else: once the run has been told to finish,
+			// telling it to batch its lookups contradicts that for the rest of
+			// the run, not only on this turn.
+			batchNudged = true
+
+			msg := cfg.BatchNudgeMessage
+			if msg == "" {
+				msg = fmt.Sprintf("Your last %d turns each spent a whole model call on a single read-only lookup. When your next lookups do not depend on each other, issue them together in one turn.", singleBatchTurns)
+			}
+
+			msgs = append(msgs, llm.Message{Role: "user", Content: msg})
+
+			emit.Emit(events.StateChange, map[string]any{"event": "batch_nudge", "single_call_turns": singleBatchTurns})
 		}
 
 		res.Turns++
@@ -392,6 +426,8 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 
 		// Authoritative: tool_calls presence drives continuation, not finish_reason.
 		if len(resp.ToolCalls) == 0 {
+			singleBatchTurns = 0
+
 			if cfg.Inbox == nil {
 				res.Completed = true
 				res.Reason = "done"
@@ -450,6 +486,11 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 		// turnFailedArgs collects the raw arguments string of every tool call
 		// this turn that failed to parse, for classifyIncapable evidence.
 		var turnFailedArgs []string
+
+		// turnReadOnly is set when a call this turn dispatched to a read-only
+		// tool. Paired with a one-call turn it is the shape the nudge counts;
+		// whether the call then succeeded is not part of the shape.
+		turnReadOnly := false
 
 		// terminated is set when a tools.Terminal tool executes successfully this
 		// turn; completionArgs carries that call's normalized arguments. The
@@ -510,6 +551,10 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 				// loop regardless of whether Execute succeeds or returns a domain error.
 				turnHadCapableTool = true
 
+				if readOnlyTool(tool) {
+					turnReadOnly = true
+				}
+
 				out, err := tool.Execute(ctx, args)
 				if err != nil {
 					res.ToolCallFailures++
@@ -565,6 +610,12 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 			emit.Emit(events.StateChange, map[string]any{"stop": "done", "turns": res.Turns, "via": "terminating_tool"})
 
 			return res, nil
+		}
+
+		if len(resp.ToolCalls) == 1 && turnReadOnly {
+			singleBatchTurns++
+		} else {
+			singleBatchTurns = 0
 		}
 
 		// Incapability detection: only evaluated when the model emitted tool calls.
@@ -709,6 +760,19 @@ func awaitNext(ctx context.Context, cfg Config, msgs []llm.Message, emit *events
 	msgs = append(msgs, llm.Message{Role: "user", Content: um.Content})
 
 	return msgs, "continue", nil
+}
+
+// readOnlyTool reports whether t is a ReadOnly, non-Terminal tool - the tool
+// shape the batching nudge counts. A Terminal tool is excluded even if it were
+// marked read-only: its call ends the run.
+func readOnlyTool(t tools.Tool) bool {
+	if term, ok := t.(tools.Terminal); ok && term.Terminal() {
+		return false
+	}
+
+	r, ok := t.(tools.ReadOnly)
+
+	return ok && r.ReadOnly()
 }
 
 func toolResultMsg(id, content string) llm.Message {

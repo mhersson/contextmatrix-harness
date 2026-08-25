@@ -159,3 +159,164 @@ func TestWrapUpNudgeIgnoredInInteractiveMode(t *testing.T) {
 		}
 	}
 }
+
+// singleReadResp is one turn that spends a whole round trip on one read.
+func singleReadResp(id string) llm.Response {
+	return llm.Response{ToolCalls: []llm.ToolCall{toolCall(id, "read", `{"path":"missing"}`)}}
+}
+
+func TestBatchNudgeInjectedOnceAtThreshold(t *testing.T) {
+	reg := tools.NewRegistry(tools.NewReadTool(t.TempDir()))
+	w := &burnLLM{}
+
+	var transcript bytes.Buffer
+
+	emit := events.NewEmitter(nil, &transcript)
+
+	res, err := Run(context.Background(), w, reg, emit, "task", Config{
+		MaxTurns: 6, BatchNudgeTurns: 3, BatchNudgeMessage: "BATCH UP",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "max_turns", res.Reason)
+	require.Len(t, w.requests, 6)
+
+	// Three consecutive single-read turns are turns 1-3, so the nudge lands at
+	// the top of turn 4 (request index 3) - and exactly once, ever.
+	assert.Equal(t, 0, countUserMsg(w.requests[2], "BATCH UP"), "no nudge before the threshold")
+	assert.Equal(t, 1, countUserMsg(w.requests[3], "BATCH UP"), "nudge lands on the turn after the third single call")
+	assert.Equal(t, 1, countUserMsg(w.requests[5], "BATCH UP"), "never injected twice")
+
+	var nudge *events.Event
+
+	for i, ev := range parseEvents(t, transcript.String()) {
+		if ev.Kind == events.StateChange && ev.Data["event"] == "batch_nudge" {
+			nudge = &parseEvents(t, transcript.String())[i]
+
+			break
+		}
+	}
+
+	require.NotNil(t, nudge, "the nudge must be reported on the event stream")
+	assert.InDelta(t, 3.0, nudge.Data["single_call_turns"], 0, "the event reports the count that tripped it")
+}
+
+func TestBatchNudgeCounterResets(t *testing.T) {
+	tests := []struct {
+		name    string
+		breaker llm.Response
+	}{
+		{
+			name: "a turn with two calls",
+			breaker: llm.Response{ToolCalls: []llm.ToolCall{
+				toolCall("m1", "read", `{"path":"missing"}`),
+				toolCall("m2", "read", `{"path":"other"}`),
+			}},
+		},
+		{
+			name:    "a write call",
+			breaker: llm.Response{ToolCalls: []llm.ToolCall{toolCall("w1", "write", `{"path":"f.txt","content":"x"}`)}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			reg := tools.NewRegistry(tools.NewReadTool(root), tools.NewWriteTool(root))
+			w := &burnLLM{responses: []llm.Response{
+				singleReadResp("1"),
+				singleReadResp("2"),
+				tt.breaker,
+				singleReadResp("4"),
+				singleReadResp("5"),
+			}}
+
+			_, err := Run(context.Background(), w, reg, newEmitter(), "task", Config{
+				MaxTurns: 5, BatchNudgeTurns: 3, BatchNudgeMessage: "BATCH UP",
+			})
+			require.NoError(t, err)
+			require.Len(t, w.requests, 5)
+
+			assert.Equal(t, 0, countUserMsg(w.requests[4], "BATCH UP"),
+				"the reset means the threshold is never reached in %d turns", len(w.requests))
+		})
+	}
+}
+
+func TestBatchNudgeIgnoresBash(t *testing.T) {
+	root := t.TempDir()
+	reg := tools.NewRegistry(tools.NewBashTool(root))
+	w := &burnLLM{responses: []llm.Response{
+		{ToolCalls: []llm.ToolCall{toolCall("b1", "bash", `{"command":"true"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("b2", "bash", `{"command":"true"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("b3", "bash", `{"command":"true"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("b4", "bash", `{"command":"true"}`)}},
+	}}
+
+	_, err := Run(context.Background(), w, reg, newEmitter(), "task", Config{
+		MaxTurns: 4, BatchNudgeTurns: 2, BatchNudgeMessage: "BATCH UP",
+	})
+	require.NoError(t, err)
+	require.Len(t, w.requests, 4)
+
+	assert.Equal(t, 0, countUserMsg(w.requests[3], "BATCH UP"),
+		"shell commands are order-dependent - batching them is never suggested")
+}
+
+func TestBatchNudgeTerminalCallResetsCounter(t *testing.T) {
+	reg := tools.NewRegistry(tools.NewReadTool(t.TempDir()), &finishTool{})
+	w := &burnLLM{responses: []llm.Response{
+		singleReadResp("1"),
+		singleReadResp("2"),
+		{ToolCalls: []llm.ToolCall{toolCall("3", "finish", `{"commit_message":"done"}`)}},
+	}}
+
+	res, err := Run(context.Background(), w, reg, newEmitter(), "task", Config{
+		MaxTurns: 6, BatchNudgeTurns: 3, BatchNudgeMessage: "BATCH UP",
+	})
+	require.NoError(t, err)
+	require.True(t, res.Completed)
+	assert.Equal(t, 3, res.Turns, "the terminal call ends the run before any nudge")
+}
+
+func TestBatchNudgeDisabledAtZero(t *testing.T) {
+	reg := tools.NewRegistry(tools.NewReadTool(t.TempDir()))
+	w := &burnLLM{}
+
+	var transcript bytes.Buffer
+
+	_, err := Run(context.Background(), w, reg, events.NewEmitter(nil, &transcript), "task", Config{MaxTurns: 4})
+	require.NoError(t, err)
+	require.Len(t, w.requests, 4)
+
+	for _, m := range w.requests[3].Messages {
+		if m.Role == "user" {
+			assert.Equal(t, "task", m.Content, "a zero threshold injects nothing")
+		}
+	}
+
+	for _, ev := range parseEvents(t, transcript.String()) {
+		if ev.Kind == events.StateChange {
+			assert.NotEqual(t, "batch_nudge", ev.Data["event"], "a zero threshold emits nothing")
+		}
+	}
+}
+
+// TestBatchNudgeYieldsToWrapUp drives a run where both thresholds trip on the
+// same turn: the wrap-up lands at the top of turn 4 (2 of 5 turns left), and
+// three single-read turns have just put the batch counter at its threshold.
+func TestBatchNudgeYieldsToWrapUp(t *testing.T) {
+	reg := tools.NewRegistry(tools.NewReadTool(t.TempDir()))
+	w := &burnLLM{}
+
+	_, err := Run(context.Background(), w, reg, newEmitter(), "task", Config{
+		MaxTurns: 5, WrapUpTurns: 2, WrapUpMessage: "WRAP UP NOW",
+		BatchNudgeTurns: 3, BatchNudgeMessage: "BATCH UP",
+	})
+	require.NoError(t, err)
+	require.Len(t, w.requests, 5)
+
+	assert.Equal(t, 1, countUserMsg(w.requests[3], "WRAP UP NOW"), "the wrap-up nudge wins the turn")
+	assert.Equal(t, 0, countUserMsg(w.requests[3], "BATCH UP"), "no two contradictory messages on one turn")
+	assert.Equal(t, 0, countUserMsg(w.requests[4], "BATCH UP"),
+		"and a run already told to finish is never later told to batch its reads")
+}

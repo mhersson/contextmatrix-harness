@@ -392,3 +392,6 @@ func fdBinary() string {
 
 	return ""
 }
+
+// ReadOnly marks glob as side-effect-free: see tools.ReadOnly.
+func (t GlobTool) ReadOnly() bool { return true }
