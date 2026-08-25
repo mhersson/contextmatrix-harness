@@ -2,14 +2,16 @@ package tools
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 )
 
-// echolessArgs is called by both missingArgError and wrongTypeArgError to format
-// the received arguments. It is separated so the echo formatting is tested through
-// the exported requireString function rather than tested independently.
-func echolessArgs(args map[string]any) string {
+// receivedArgs formats the arguments a failing call did carry: key names with
+// byte lengths for strings and Go types for anything else, never values. Keys
+// are sorted so two identical failures produce the same message.
+func receivedArgs(args map[string]any) string {
 	if len(args) == 0 {
 		return ""
 	}
@@ -17,19 +19,16 @@ func echolessArgs(args map[string]any) string {
 	var b strings.Builder
 	b.WriteString("; received: ")
 
-	first := true
-	for k, v := range args {
-		if !first {
+	for i, k := range slices.Sorted(maps.Keys(args)) {
+		if i > 0 {
 			b.WriteString(", ")
 		}
 
-		first = false
-
-		s, ok := v.(string)
+		s, ok := args[k].(string)
 		if ok {
 			fmt.Fprintf(&b, "%s (%d B)", k, len(s))
 		} else {
-			fmt.Fprintf(&b, "%s (%T)", k, v)
+			fmt.Fprintf(&b, "%s (%T)", k, args[k])
 		}
 	}
 
@@ -37,11 +36,11 @@ func echolessArgs(args map[string]any) string {
 }
 
 func missingArgError(toolName, key, purpose string, args map[string]any) error {
-	return fmt.Errorf("tool %q: missing required argument %q (%s)%s", toolName, key, purpose, echolessArgs(args))
+	return fmt.Errorf("tool %q: missing required argument %q (%s)%s", toolName, key, purpose, receivedArgs(args))
 }
 
 func wrongTypeArgError(toolName, key string, args map[string]any) error {
-	return fmt.Errorf("tool %q: argument %q must be a string%s", toolName, key, echolessArgs(args))
+	return fmt.Errorf("tool %q: argument %q must be a string%s", toolName, key, receivedArgs(args))
 }
 
 func requireString(args map[string]any, toolName, key, purpose string) (string, error) {

@@ -71,13 +71,27 @@ func TestRequireStringWrongType(t *testing.T) {
 	assert.NotContains(t, msg, "42")
 }
 
-func TestEcholessArgs(t *testing.T) {
+func TestRequireStringEchoIsSorted(t *testing.T) {
+	args := map[string]any{
+		"old_string": strings.Repeat("x", 1421),
+		"new_string": strings.Repeat("y", 893),
+		"count":      3,
+	}
+
+	_, err := requireString(args, "edit", "path", "file path relative to the workspace root")
+	require.Error(t, err)
+
+	// Sorted so two identical failures in one run produce the same message.
+	assert.Contains(t, err.Error(), "; received: count (int), new_string (893 B), old_string (1421 B)")
+}
+
+func TestReceivedArgs(t *testing.T) {
 	args := map[string]any{
 		"path": "/tmp/foo.txt",
 		"data": strings.Repeat("x", 1000),
 	}
 
-	result := echolessArgs(args)
+	result := receivedArgs(args)
 	assert.Contains(t, result, "path")
 	assert.Contains(t, result, "12 B") // len("/tmp/foo.txt") == 12
 	assert.Contains(t, result, "1000 B")
@@ -97,4 +111,7 @@ func TestRequireStringByteLengthsInMessage(t *testing.T) {
 	assert.Contains(t, msg, "893 B")
 	assert.Contains(t, msg, "old_string")
 	assert.Contains(t, msg, "new_string")
+	// Lengths only: echoing the payload back is what this error exists to avoid.
+	assert.NotContains(t, msg, strings.Repeat("x", 100))
+	assert.NotContains(t, msg, strings.Repeat("y", 100))
 }
