@@ -39,7 +39,10 @@ const globScanBufSize = 1 << 20
 // while scanning, so the check itself stays cheap on a large enumeration.
 const globCtxCheckEvery = 4096
 
-type GlobTool struct{ root string }
+type GlobTool struct {
+	root      string
+	readRoots []string
+}
 
 func NewGlobTool(root string) GlobTool { return GlobTool{root: root} }
 
@@ -68,7 +71,7 @@ func (t GlobTool) Execute(ctx context.Context, args map[string]any) (Result, err
 
 	searchPath := t.root
 	if rel := optString(args, "path", ""); rel != "" {
-		abs, err := resolveInRoot(t.root, rel)
+		abs, err := resolveInRoots(t.roots(), rel)
 		if err != nil {
 			return Result{}, err
 		}
@@ -395,3 +398,21 @@ func fdBinary() string {
 
 // ReadOnly marks glob as side-effect-free: see tools.ReadOnly.
 func (t GlobTool) ReadOnly() bool { return true }
+
+// WithReadRoots returns a copy that may also read inside the given trees, in
+// addition to the workspace. Roots are caller-supplied configuration - never a
+// tool argument - and are filtered by sanitizeReadRoots, so a root that would
+// widen past the workspace is dropped. With no roots the tool behaves exactly
+// as before. Only the search path resolves against them: with no path argument
+// the tool still works from the workspace root.
+func (t GlobTool) WithReadRoots(roots []string) GlobTool {
+	t.readRoots = sanitizeReadRoots(t.root, roots)
+
+	return t
+}
+
+// roots is the ordered permitted set: the workspace first, then any extra
+// read-only roots.
+func (t GlobTool) roots() []string {
+	return append([]string{t.root}, t.readRoots...)
+}
