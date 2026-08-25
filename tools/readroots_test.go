@@ -155,6 +155,14 @@ func TestExtraReadRootsRejectedAtConstruction(t *testing.T) {
 	f := newReadRootFixture(t)
 	parent := filepath.Dir(f.workspace)
 
+	// A root that only reaches the workspace's parent through a symlink: the
+	// containment check resolves symlinks, so this gate must resolve them too.
+	linkToParent := filepath.Join(parent, "dep-link")
+	require.NoError(t, os.Symlink(parent, linkToParent))
+
+	linkToSlash := filepath.Join(parent, "root-link")
+	require.NoError(t, os.Symlink("/", linkToSlash))
+
 	tests := []struct {
 		name string
 		root string
@@ -162,6 +170,9 @@ func TestExtraReadRootsRejectedAtConstruction(t *testing.T) {
 		{name: "empty", root: ""},
 		{name: "filesystem root", root: "/"},
 		{name: "a prefix of the workspace", root: parent},
+		{name: "a symlink to a prefix of the workspace", root: linkToParent},
+		{name: "a symlink to the filesystem root", root: linkToSlash},
+		{name: "a relative path", root: "dep"},
 	}
 
 	for _, tc := range tests {

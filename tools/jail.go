@@ -73,8 +73,13 @@ func sanitizeReadRoots(workspace string, roots []string) []string {
 		return nil
 	}
 
-	wsClean := filepath.Clean(workspace)
 	sep := string(os.PathSeparator)
+
+	// Compare RESOLVED paths. resolveInRoots checks containment against the
+	// symlink-resolved root, so validating the unresolved one would wave through
+	// a root that is a symlink to / or to the workspace's parent - defeating the
+	// very widening this function exists to refuse.
+	wsResolved := evalOrSelf(filepath.Clean(workspace))
 
 	var out []string
 
@@ -84,12 +89,20 @@ func sanitizeReadRoots(workspace string, roots []string) []string {
 		}
 
 		rc := filepath.Clean(r)
-		if rc == sep || rc == "." {
+
+		// A relative root would resolve against the process working directory,
+		// which is never what a caller configuring a dependency tree meant.
+		if !filepath.IsAbs(rc) {
 			continue
 		}
 
-		// rc contains (or is) the workspace: permitting it would widen, not extend.
-		if wsClean == rc || strings.HasPrefix(wsClean, rc+sep) {
+		resolved := evalOrSelf(rc)
+		if resolved == sep {
+			continue
+		}
+
+		// resolved contains (or is) the workspace: permitting it would widen.
+		if wsResolved == resolved || strings.HasPrefix(wsResolved, resolved+sep) {
 			continue
 		}
 
