@@ -108,3 +108,6 @@ func capLines(s string, maxLines int) string {
 
 	return kept + fmt.Sprintf("\n[... %d more matching lines - narrow the pattern or add a glob/path filter]", len(lines)-maxLines)
 }
+
+// ReadOnly marks grep as side-effect-free: see tools.ReadOnly.
+func (t GrepTool) ReadOnly() bool { return true }

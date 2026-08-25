@@ -219,3 +219,6 @@ func (t ReadTool) Execute(_ context.Context, args map[string]any) (Result, error
 
 	return Result{Text: out.String()}, nil
 }
+
+// ReadOnly marks read as side-effect-free: see tools.ReadOnly.
+func (t ReadTool) ReadOnly() bool { return true }
