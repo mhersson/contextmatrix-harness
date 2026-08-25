@@ -291,8 +291,8 @@ func TestGraceTurnEmitsToolCallAndToolResult(t *testing.T) {
 	assert.Less(t, callIdx, resultIdx, "tool_call must precede tool_result")
 	assert.Less(t, resultIdx, stateIdx, "tool_result must precede state_change")
 
-	assert.GreaterOrEqual(t, res.ToolCallCount, 1,
-		"ToolCallCount must be at least 1 (the grace call)")
+	assert.Equal(t, 4, res.ToolCallCount,
+		"three burn calls plus the grace call - GreaterOrEqual(1) could not fail here")
 }
 
 func TestGraceTurnToolCallRedactedArgs(t *testing.T) {

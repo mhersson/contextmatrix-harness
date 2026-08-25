@@ -3,6 +3,7 @@ package harness
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -224,4 +225,65 @@ func TestHumanInterjectionInvalidatesTheRepeatGuard(t *testing.T) {
 
 	assert.Equal(t, 2, look.calls,
 		"a human who says the file changed must not be answered from a skipped call")
+}
+
+// D3: a read-only call that FAILED must not be remembered as if it produced a
+// result - the retry would be told to use a result that never existed.
+func TestFailedReadOnlyCallIsNotCached(t *testing.T) {
+	look := &failingReadOnlyTool{}
+
+	f := &fakeLLM{responses: []llm.Response{
+		{ToolCalls: []llm.ToolCall{toolCall("1", "look", `{"path":"a.go"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("2", "look", `{"path":"a.go"}`)}},
+		{Content: "done", FinishReason: "stop"},
+	}}
+
+	res, err := Run(context.Background(), f, tools.NewRegistry(look), newEmitter(), "task", Config{MaxTurns: 5})
+	require.NoError(t, err)
+
+	assert.Equal(t, 2, look.calls, "a failed call is not a result to reuse")
+
+	for _, r := range toolResults(res.Messages) {
+		assert.NotContains(t, r, "use that result", "no retry is pointed at a result that does not exist")
+	}
+}
+
+// failingReadOnlyTool is a side-effect-free tool whose every call errors.
+type failingReadOnlyTool struct{ calls int }
+
+func (f *failingReadOnlyTool) Name() string { return "look" }
+func (f *failingReadOnlyTool) Schema() llm.Tool {
+	return llm.Tool{Type: "function", Function: llm.ToolFunction{Name: "look"}}
+}
+
+func (f *failingReadOnlyTool) Execute(context.Context, map[string]any) (tools.Result, error) {
+	f.calls++
+
+	return tools.Result{}, errors.New("file does not exist; use glob to list existing paths")
+}
+func (f *failingReadOnlyTool) ReadOnly() bool { return true }
+
+// D4b: an injected synthetic nudge is not human input and must not clear the
+// repeat guard.
+func TestNudgeDoesNotClearTheRepeatGuard(t *testing.T) {
+	look := &countingReadOnlyTool{name: "look"}
+	other := &countingReadOnlyTool{name: "other"}
+
+	// Distinct calls advance the nudge counter; the repeated one straddles the
+	// nudge injection.
+	w := &burnLLM{responses: []llm.Response{
+		{ToolCalls: []llm.ToolCall{toolCall("1", "look", `{"path":"a.go"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("2", "other", `{"path":"b.go"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("3", "other", `{"path":"c.go"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("4", "other", `{"path":"d.go"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("5", "look", `{"path":"a.go"}`)}},
+	}}
+
+	_, err := Run(context.Background(), w, tools.NewRegistry(look, other), newEmitter(), "task", Config{
+		MaxTurns: 5, BatchNudgeTurns: 3, BatchNudgeMessage: "BATCH UP",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, countUserMsg(w.requests[4], "BATCH UP"), "the nudge did fire")
+
+	assert.Equal(t, 1, look.calls, "the nudge is not human input and must not invalidate the guard")
 }

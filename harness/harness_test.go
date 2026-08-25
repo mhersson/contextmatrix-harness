@@ -2032,3 +2032,28 @@ func TestRunCompactionUsageEventCarriesCacheBuckets(t *testing.T) {
 	assert.InDelta(t, 20.0, compactionEv.Data["completion_tokens"], 0, "completion_tokens must be preserved")
 	assert.InDelta(t, 0.10, compactionEv.Data["cost_usd"], 0, "cost_usd must be preserved")
 }
+
+// D1: a second terminal call in one batch must not execute the terminal tool
+// again - tools.Terminal carries no idempotency contract, and in the agent the
+// terminal tool reports completion over MCP.
+func TestRunDuplicateTerminalCallExecutesOnce(t *testing.T) {
+	fin := &finishTool{}
+	after := &countingTool{name: "after"}
+	reg := tools.NewRegistry(fin, after)
+
+	f := &fakeLLM{responses: []llm.Response{
+		{ToolCalls: []llm.ToolCall{
+			toolCall("1", "finish", `{"commit_message":"first"}`),
+			toolCall("2", "finish", `{"commit_message":"second"}`),
+			toolCall("3", "after", `{}`),
+		}},
+	}}
+
+	res, err := Run(context.Background(), f, reg, newEmitter(), "task", Config{MaxTurns: 5})
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, fin.calls, "the terminating tool executes once per batch")
+	assert.JSONEq(t, `{"commit_message":"first"}`, string(res.CompletionArgs), "the first terminal call wins")
+	assert.Equal(t, 1, after.calls, "non-terminal calls still execute, as CTXHNS-015 requires")
+	assert.Empty(t, unansweredToolCalls(res.Messages), "every call is still answered")
+}
