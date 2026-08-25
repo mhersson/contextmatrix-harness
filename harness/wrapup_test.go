@@ -3,6 +3,7 @@ package harness
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -265,20 +266,29 @@ func TestBatchNudgeIgnoresBash(t *testing.T) {
 		"shell commands are order-dependent - batching them is never suggested")
 }
 
+// TestBatchNudgeTerminalCallResetsCounter pins that a terminal call is another
+// turn shape. It must be a FAILING terminal call: a successful one ends the run
+// before the counter is touched, so the earlier version of this test - which
+// used a successful finish - asserted a property the loop does not have and
+// could not fail.
 func TestBatchNudgeTerminalCallResetsCounter(t *testing.T) {
-	reg := tools.NewRegistry(tools.NewReadTool(t.TempDir()), &finishTool{})
+	reg := tools.NewRegistry(tools.NewReadTool(t.TempDir()), &finishTool{execErr: errors.New("boom")})
 	w := &burnLLM{responses: []llm.Response{
 		singleReadResp("1"),
 		singleReadResp("2"),
-		{ToolCalls: []llm.ToolCall{toolCall("3", "finish", `{"commit_message":"done"}`)}},
+		{ToolCalls: []llm.ToolCall{toolCall("3", "finish", `{"commit_message":"x"}`)}},
+		singleReadResp("4"),
+		singleReadResp("5"),
 	}}
 
-	res, err := Run(context.Background(), w, reg, newEmitter(), "task", Config{
-		MaxTurns: 6, BatchNudgeTurns: 3, BatchNudgeMessage: "BATCH UP",
+	_, err := Run(context.Background(), w, reg, newEmitter(), "task", Config{
+		MaxTurns: 5, BatchNudgeTurns: 3, BatchNudgeMessage: "BATCH UP",
 	})
 	require.NoError(t, err)
-	require.True(t, res.Completed)
-	assert.Equal(t, 3, res.Turns, "the terminal call ends the run before any nudge")
+	require.Len(t, w.requests, 5, "an erroring terminal call does not end the run")
+
+	assert.Equal(t, 0, countUserMsg(w.requests[4], "BATCH UP"),
+		"the terminal call breaks the run of single read-only turns")
 }
 
 func TestBatchNudgeDisabledAtZero(t *testing.T) {
@@ -322,4 +332,28 @@ func TestBatchNudgeYieldsToWrapUp(t *testing.T) {
 	assert.Equal(t, 0, countUserMsg(w.requests[3], "BATCH UP"), "no two contradictory messages on one turn")
 	assert.Equal(t, 0, countUserMsg(w.requests[4], "BATCH UP"),
 		"and a run already told to finish is never later told to batch its reads")
+}
+
+// TestBatchNudgeIgnoresSkippedCalls pins that a call answered from the repeat
+// record does not count toward the nudge. It spent no round trip on a lookup,
+// and a model repeating one call is looping - telling it to batch misdiagnoses
+// it and spends the one-shot nudge on the wrong problem.
+func TestBatchNudgeIgnoresSkippedCalls(t *testing.T) {
+	look := &countingReadOnlyTool{name: "look"}
+
+	var resp []llm.Response
+	for i := 1; i <= 5; i++ {
+		resp = append(resp, llm.Response{ToolCalls: []llm.ToolCall{toolCall(fmt.Sprintf("%d", i), "look", `{"path":"a.go"}`)}})
+	}
+
+	w := &burnLLM{responses: resp}
+
+	_, err := Run(context.Background(), w, tools.NewRegistry(look), newEmitter(), "task", Config{
+		MaxTurns: 5, BatchNudgeTurns: 3, BatchNudgeMessage: "BATCH UP",
+	})
+	require.NoError(t, err)
+	require.Len(t, w.requests, 5)
+
+	assert.Equal(t, 0, countUserMsg(w.requests[4], "BATCH UP"),
+		"a model repeating one call is looping, not failing to batch")
 }

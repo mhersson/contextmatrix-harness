@@ -64,8 +64,10 @@ func resolveInRoots(roots []string, p string) (string, error) {
 }
 
 // sanitizeReadRoots drops extra read roots that would widen access rather than
-// add a sibling tree: an empty path, the filesystem root, and any root that
-// contains the workspace (which would permit the workspace's whole parentage).
+// add a sibling tree: an empty path, a relative path, one that cannot be
+// resolved, the filesystem root, and any root that contains the workspace
+// (which would permit the workspace's whole parentage). What survives is stored
+// symlink-resolved, so what was judged here is what resolveInRoots checks.
 // Dropping is silent and one-directional - a misconfigured root narrows access,
 // it never widens it - so a caller cannot accidentally open the filesystem.
 func sanitizeReadRoots(workspace string, roots []string) []string {
@@ -96,8 +98,13 @@ func sanitizeReadRoots(workspace string, roots []string) []string {
 			continue
 		}
 
-		resolved := evalOrSelf(rc)
-		if resolved == sep {
+		// EvalSymlinks, not evalOrSelf: a root that cannot be resolved NOW cannot
+		// be judged now either, and one that appears later - a dependency tree
+		// mounted after the tools were built - can point anywhere. resolveInRoots
+		// re-resolves per call, so keeping an unresolvable root would defer this
+		// gate to a moment that never runs it.
+		resolved, rerr := filepath.EvalSymlinks(rc)
+		if rerr != nil || resolved == sep {
 			continue
 		}
 
@@ -106,7 +113,7 @@ func sanitizeReadRoots(workspace string, roots []string) []string {
 			continue
 		}
 
-		out = append(out, rc)
+		out = append(out, resolved)
 	}
 
 	return out

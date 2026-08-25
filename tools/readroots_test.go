@@ -146,7 +146,11 @@ func TestExtraReadRootsPerTool(t *testing.T) {
 
 			err := tc.exec(target)
 			require.Error(t, err, "a path in no permitted root is refused")
-			assert.Contains(t, err.Error(), target)
+			// A jail refusal specifically, not merely the path: edit also fails with
+			// "old_string not found in <path>", so Contains(path) passes even with
+			// containment removed entirely. Single-root tools say "escapes workspace
+			// root"; a tool carrying extra roots names them all.
+			assert.Regexp(t, `escapes workspace root|outside the workspace and every permitted read-only root`, err.Error())
 		})
 	}
 }
@@ -212,4 +216,28 @@ func TestNoExtraReadRootsIsUnchanged(t *testing.T) {
 	require.Error(t, err2)
 	assert.Equal(t, err1.Error(), err2.Error(), "the refusal message is unchanged")
 	assert.Contains(t, err1.Error(), "escapes workspace root", "the single-root message is byte-identical")
+}
+
+// TestUnresolvableReadRootIsDropped pins that a root which cannot be resolved
+// when the tool is built grants nothing later. A worker that builds its tools
+// before the dependency tree is mounted would otherwise carry a root that is
+// judged only by a per-call re-resolution - and the path that appears later can
+// point anywhere, including at the workspace's own parent.
+func TestUnresolvableReadRootIsDropped(t *testing.T) {
+	base := t.TempDir()
+	ws := filepath.Join(base, "workspace")
+	require.NoError(t, os.MkdirAll(ws, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(base, "secret.txt"), []byte("TOPSECRET"), 0o644))
+
+	deps := filepath.Join(base, "deps") // not mounted yet
+
+	assert.Empty(t, sanitizeReadRoots(ws, []string{deps}), "an unresolvable root is dropped at construction")
+
+	tool := NewReadTool(ws).WithReadRoots([]string{deps})
+
+	// The path appears later, as a symlink to the workspace's parent.
+	require.NoError(t, os.Symlink(base, deps))
+
+	_, err := tool.Execute(context.Background(), map[string]any{"path": filepath.Join(base, "secret.txt")})
+	require.Error(t, err, "a root dropped at construction cannot be revived by the filesystem")
 }
