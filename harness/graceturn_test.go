@@ -426,27 +426,25 @@ func TestGraceTurnUsageEventCarriesCacheBuckets(t *testing.T) {
 
 	evs := parseEvents(t, transcript.String())
 
-	// Locate the usage event that carries the cache fields (the grace call's).
+	// The grace call is the last model call of the run, so its usage event is
+	// the last one. Selecting it by position rather than by the field under
+	// test keeps a dropped field failing as a missing key.
 	var graceUsageEv *events.Event
 
 	for i, ev := range evs {
 		if ev.Kind == events.UsageKind {
-			if cr, ok := ev.Data["cache_read_tokens"]; ok && cr != float64(0) {
-				graceUsageEv = &evs[i]
-
-				break
-			}
+			graceUsageEv = &evs[i]
 		}
 	}
 
-	require.NotNil(t, graceUsageEv, "must have a usage event with non-zero cache_read_tokens")
+	require.NotNil(t, graceUsageEv, "the grace turn must emit a usage event")
 
 	// The grace-call usage event must carry both cache fields.
 	assert.InDelta(t, 60.0, graceUsageEv.Data["cache_read_tokens"], 0, "cache_read_tokens must match")
 	assert.InDelta(t, 8.0, graceUsageEv.Data["cache_creation_tokens"], 0, "cache_creation_tokens must match")
 
-	// Pre-existing keys must be unchanged.
-	assert.InDelta(t, 100.0, graceUsageEv.Data["prompt_tokens"], 0, "prompt_tokens must be preserved")
+	// Disjoint buckets: 60 of the 100 prompt tokens were a cache read.
+	assert.InDelta(t, 40.0, graceUsageEv.Data["prompt_tokens"], 0, "prompt_tokens must exclude the cached portion")
 	assert.InDelta(t, 20.0, graceUsageEv.Data["completion_tokens"], 0, "completion_tokens must be preserved")
 	assert.InDelta(t, 0.5, graceUsageEv.Data["cost_usd"], 0, "cost_usd must be preserved")
 }
