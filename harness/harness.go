@@ -446,7 +446,8 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 		var turnFailedArgs []string
 
 		// terminated is set when a tools.Terminal tool executes successfully this
-		// turn; completionArgs carries that call's normalized arguments.
+		// turn; completionArgs carries that call's normalized arguments. The
+		// first terminal call in a batch wins.
 		terminated := false
 
 		var completionArgs json.RawMessage
@@ -520,29 +521,34 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 
 				emit.Emit(events.ToolResult, map[string]any{"id": tc.ID, "output_len": len(text)})
 
-				if term, isTerminal := tool.(tools.Terminal); isTerminal && term.Terminal() {
+				if term, isTerminal := tool.(tools.Terminal); isTerminal && term.Terminal() && !terminated {
 					terminated = true
 					completionArgs = json.RawMessage(normalizeArgs(tc.Function.Arguments))
 				}
 			}()
 
-			if terminated {
-				res.Completed = true
-				res.Reason = "done"
-				res.CompletionArgs = completionArgs
-
-				emit.Emit(events.StateChange, map[string]any{"stop": "done", "turns": res.Turns, "via": "terminating_tool"})
-
-				return res, nil
-			}
-
-			// Drain mid-batch only if there are remaining calls to skip.
-			if cfg.Inbox != nil && i < len(resp.ToolCalls)-1 {
+			// Drain mid-batch only if there are remaining calls to skip. A batch
+			// that already terminated runs to the end regardless: the assistant
+			// message references every call ID, so every one still owes a result.
+			if cfg.Inbox != nil && !terminated && i < len(resp.ToolCalls)-1 {
 				if pending := cfg.Inbox.Drain(); len(pending) > 0 {
 					interrupted = true
 					pendingMsgs = pending // stash; appended after the loop
 				}
 			}
+		}
+
+		// A terminal call ends the run only once the whole batch has executed:
+		// returning mid-batch would drop the calls after it, leaving their IDs
+		// unanswered in the history this run carries out.
+		if terminated {
+			res.Completed = true
+			res.Reason = "done"
+			res.CompletionArgs = completionArgs
+
+			emit.Emit(events.StateChange, map[string]any{"stop": "done", "turns": res.Turns, "via": "terminating_tool"})
+
+			return res, nil
 		}
 
 		// Incapability detection: only evaluated when the model emitted tool calls.

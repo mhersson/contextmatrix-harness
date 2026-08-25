@@ -441,28 +441,102 @@ func TestRunTerminatingToolEmptyArgsNormalized(t *testing.T) {
 	assert.JSONEq(t, "{}", string(res.CompletionArgs))
 }
 
-func TestRunTerminatingToolBatchSkipsAfter(t *testing.T) {
-	before := &countingTool{name: "before"}
-	after := &countingTool{name: "after"}
-	fin := &finishTool{}
-	reg := tools.NewRegistry(before, fin, after)
+// unansweredToolCalls returns the IDs of tool calls in msgs that never received
+// a matching tool-result message. A non-empty result means the run carried
+// malformed history out: the API rejects an assistant tool_call with no result.
+func unansweredToolCalls(msgs []llm.Message) []string {
+	answered := make(map[string]bool)
 
-	f := &fakeLLM{responses: []llm.Response{
-		{ToolCalls: []llm.ToolCall{
-			toolCall("1", "before", `{}`),
-			toolCall("2", "finish", `{"commit_message":"x"}`),
-			toolCall("3", "after", `{}`),
-		}},
-	}}
+	for _, m := range msgs {
+		if m.Role == "tool" {
+			answered[m.ToolCallID] = true
+		}
+	}
 
-	res, err := Run(context.Background(), f, reg, newEmitter(), "do it", Config{MaxTurns: 10})
-	require.NoError(t, err)
+	var missing []string
 
-	assert.True(t, res.Completed)
-	assert.Equal(t, 1, before.calls, "calls before the terminating one execute")
-	assert.Equal(t, 1, fin.calls, "the terminating call executes")
-	assert.Equal(t, 0, after.calls, "calls after the terminating one are skipped")
-	assert.JSONEq(t, `{"commit_message":"x"}`, string(res.CompletionArgs), "surfaces the terminating call's args, not before/after")
+	for _, m := range msgs {
+		for _, tc := range m.ToolCalls {
+			if !answered[tc.ID] {
+				missing = append(missing, tc.ID)
+			}
+		}
+	}
+
+	return missing
+}
+
+func TestRunTerminatingToolBatchExecutesEveryCall(t *testing.T) {
+	tests := []struct {
+		name       string
+		calls      []llm.ToolCall
+		wantBefore int
+		wantAfter  int
+	}{
+		{
+			name: "terminating call first",
+			calls: []llm.ToolCall{
+				toolCall("1", "finish", `{"commit_message":"x"}`),
+				toolCall("2", "before", `{}`),
+				toolCall("3", "after", `{}`),
+			},
+			wantBefore: 1,
+			wantAfter:  1,
+		},
+		{
+			name: "terminating call in the middle",
+			calls: []llm.ToolCall{
+				toolCall("1", "before", `{}`),
+				toolCall("2", "finish", `{"commit_message":"x"}`),
+				toolCall("3", "after", `{}`),
+			},
+			wantBefore: 1,
+			wantAfter:  1,
+		},
+		{
+			name: "terminating call last",
+			calls: []llm.ToolCall{
+				toolCall("1", "before", `{}`),
+				toolCall("2", "after", `{}`),
+				toolCall("3", "finish", `{"commit_message":"x"}`),
+			},
+			wantBefore: 1,
+			wantAfter:  1,
+		},
+		{
+			name: "unknown tool after the terminating call",
+			calls: []llm.ToolCall{
+				toolCall("1", "before", `{}`),
+				toolCall("2", "finish", `{"commit_message":"x"}`),
+				toolCall("3", "nosuch", `{}`),
+			},
+			wantBefore: 1,
+			wantAfter:  0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			before := &countingTool{name: "before"}
+			after := &countingTool{name: "after"}
+			fin := &finishTool{}
+			reg := tools.NewRegistry(before, fin, after)
+
+			f := &fakeLLM{responses: []llm.Response{{ToolCalls: tt.calls}}}
+
+			res, err := Run(context.Background(), f, reg, newEmitter(), "do it", Config{MaxTurns: 10})
+			require.NoError(t, err)
+
+			assert.True(t, res.Completed)
+			assert.Equal(t, "done", res.Reason)
+			assert.Equal(t, 1, res.Turns, "the run stops after the batch that terminated")
+			assert.Equal(t, 1, fin.calls, "the terminating call executes")
+			assert.Equal(t, tt.wantBefore, before.calls)
+			assert.Equal(t, tt.wantAfter, after.calls)
+			assert.JSONEq(t, `{"commit_message":"x"}`, string(res.CompletionArgs), "surfaces the terminating call's args")
+			assert.Empty(t, unansweredToolCalls(res.Messages), "every tool call in the batch receives a result message")
+		})
+	}
 }
 
 func TestRunTerminatingToolExecuteErrorDoesNotTerminate(t *testing.T) {
