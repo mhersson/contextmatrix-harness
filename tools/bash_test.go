@@ -29,8 +29,8 @@ func TestBashNonZeroExitReturnsError(t *testing.T) {
 	require.Error(t, err, "a non-zero exit must surface as a tool error")
 	assert.Contains(t, err.Error(), "marker-out",
 		"the error must carry the captured output; the run loop discards Result on the error path")
-
-	_ = res
+	assert.Contains(t, res.Text, "marker-out",
+		"Result.Text must also carry the output, for any future consumer that stops discarding it")
 }
 
 func TestBashTimeoutReturnsError(t *testing.T) {
