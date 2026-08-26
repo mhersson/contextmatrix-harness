@@ -19,12 +19,44 @@ func TestBashToolRunsInRoot(t *testing.T) {
 	assert.Contains(t, out.Text, root)
 }
 
-func TestBashToolReturnsFailureAsOutputNotError(t *testing.T) {
-	root := t.TempDir()
-	// A failing command must NOT return a Go error - the model needs to see it.
-	out, err := NewBashTool(root).Execute(context.Background(), map[string]any{"command": "exit 3"})
+func TestBashNonZeroExitReturnsError(t *testing.T) {
+	t.Parallel()
+
+	tool := NewBashTool(t.TempDir())
+
+	res, err := tool.Execute(t.Context(), map[string]any{"command": "echo marker-out; exit 3"})
+
+	require.Error(t, err, "a non-zero exit must surface as a tool error")
+	assert.Contains(t, err.Error(), "marker-out",
+		"the error must carry the captured output; the run loop discards Result on the error path")
+
+	_ = res
+}
+
+func TestBashTimeoutReturnsError(t *testing.T) {
+	t.Parallel()
+
+	tool := NewBashTool(t.TempDir())
+
+	_, err := tool.Execute(t.Context(), map[string]any{
+		"command":         "echo marker-out; sleep 5",
+		"timeout_seconds": 1,
+	})
+
+	require.Error(t, err, "a timed-out command must surface as a tool error")
+	assert.Contains(t, err.Error(), "marker-out",
+		"the error must carry whatever the command printed before the kill")
+}
+
+func TestBashZeroExitUnchanged(t *testing.T) {
+	t.Parallel()
+
+	tool := NewBashTool(t.TempDir())
+
+	res, err := tool.Execute(t.Context(), map[string]any{"command": "echo ok"})
+
 	require.NoError(t, err)
-	assert.Contains(t, out.Text, "exit")
+	assert.Contains(t, res.Text, "ok")
 }
 
 func TestBashTimeoutClamp(t *testing.T) {
@@ -34,7 +66,7 @@ func TestBashTimeoutClamp(t *testing.T) {
 	out, err := tool.Execute(context.Background(), map[string]any{
 		"command": "sleep 30", "timeout_seconds": 9999,
 	})
-	require.NoError(t, err)
+	require.Error(t, err, "a timed-out command must surface as a tool error")
 	assert.Less(t, time.Since(start), 5*time.Second)
 	assert.Contains(t, out.Text, "timed out after 1s")
 }
@@ -70,7 +102,7 @@ func TestBashToolKillsProcessGroupOnTimeout(t *testing.T) {
 		"command":         "(sleep 2 && touch marker) & echo started",
 		"timeout_seconds": 1.0,
 	})
-	require.NoError(t, err)
+	require.Error(t, err, "a timed-out command must surface as a tool error")
 	assert.Contains(t, out.Text, "started")
 	assert.Contains(t, out.Text, "timed out")
 
@@ -114,7 +146,7 @@ func TestBashToolTimeoutReturnsWhenSetsidGrandchildHoldsPipe(t *testing.T) {
 
 	select {
 	case o := <-ch:
-		require.NoError(t, o.err)
+		require.Error(t, o.err, "a timed-out command must surface as a tool error")
 		assert.Contains(t, o.out.Text, "started", "output captured before the kill must be returned")
 		assert.Contains(t, o.out.Text, "timed out after 1s")
 	case <-time.After(8 * time.Second):
@@ -230,7 +262,7 @@ func TestBashTimeoutAliasDrivesTimeout(t *testing.T) {
 		"command": "sleep 5",
 		"timeout": "1",
 	})
-	require.NoError(t, err)
+	require.Error(t, err, "a timed-out command must surface as a tool error")
 	assert.Contains(t, out.Text, "timed out after 1s")
 }
 

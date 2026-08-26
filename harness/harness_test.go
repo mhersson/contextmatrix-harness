@@ -555,6 +555,68 @@ func TestRunTerminatingToolExecuteErrorDoesNotTerminate(t *testing.T) {
 	assert.Equal(t, 1, res.ToolCallFailures)
 }
 
+// A shell command that exits non-zero is a domain failure the run loop must
+// count, so operators can see failing commands in the tool-failure counter.
+func TestRunCountsFailingBashAsToolFailure(t *testing.T) {
+	reg := tools.NewRegistry(tools.NewBashTool(t.TempDir()))
+
+	f := &fakeLLM{responses: []llm.Response{
+		{ToolCalls: []llm.ToolCall{toolCall("1", "bash", `{"command":"exit 1"}`)}},
+		{Content: "gave up", FinishReason: "stop"},
+	}}
+
+	res, err := Run(context.Background(), f, reg, newEmitter(), "do it", Config{MaxTurns: 10})
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, res.ToolCallFailures)
+}
+
+// A failing command is not evidence the model cannot form tool arguments.
+// The incapability classifier counts only unparseable arguments.
+func TestFailingBashDoesNotAdvanceIncapability(t *testing.T) {
+	reg := tools.NewRegistry(tools.NewBashTool(t.TempDir()))
+
+	badCall := toolCall("1", "bash", `{"command":"exit 1"}`)
+	f := &fakeLLM{responses: []llm.Response{
+		{ToolCalls: []llm.ToolCall{badCall}},
+		{ToolCalls: []llm.ToolCall{badCall}},
+		{ToolCalls: []llm.ToolCall{badCall}},
+		{Content: "gave up", FinishReason: "stop"},
+	}}
+
+	res, err := Run(context.Background(), f, reg, newEmitter(), "do it",
+		Config{MaxTurns: 10, IncapableThreshold: 3})
+	require.NoError(t, err)
+
+	assert.NotEqual(t, ReasonIncapable, res.Reason)
+	assert.Equal(t, 3, res.ToolCallFailures)
+}
+
+// The failing command's own output is the diagnostic; the error path must not
+// replace it with a bare status.
+func TestFailingBashOutputReachesModel(t *testing.T) {
+	reg := tools.NewRegistry(tools.NewBashTool(t.TempDir()))
+
+	f := &fakeLLM{responses: []llm.Response{
+		{ToolCalls: []llm.ToolCall{toolCall("1", "bash", `{"command":"echo diagnostic-marker; exit 1"}`)}},
+		{Content: "gave up", FinishReason: "stop"},
+	}}
+
+	res, err := Run(context.Background(), f, reg, newEmitter(), "do it", Config{MaxTurns: 10})
+	require.NoError(t, err)
+
+	var toolResult *llm.Message
+
+	for i := range res.Messages {
+		if res.Messages[i].Role == "tool" && res.Messages[i].ToolCallID == "1" {
+			toolResult = &res.Messages[i]
+		}
+	}
+
+	require.NotNil(t, toolResult, "expected a tool-result message for the bash call")
+	assert.Contains(t, toolResult.Content, "diagnostic-marker")
+}
+
 func TestRunTerminatingToolParseErrorDoesNotTerminate(t *testing.T) {
 	reg := tools.NewRegistry(&finishTool{})
 

@@ -54,7 +54,7 @@ func (t BashTool) Schema() llm.Tool {
 	return llm.Tool{Type: "function", Function: llm.ToolFunction{
 		Name: "bash",
 		Description: fmt.Sprintf(
-			"Run a shell command in the workspace root (%s) and return combined stdout+stderr. Non-zero exits are returned as output, not as a hard failure.",
+			"Run a shell command in the workspace root (%s) and return combined stdout+stderr. A non-zero exit or a timeout is reported as a tool failure, with the captured output.",
 			t.root),
 		Parameters: json.RawMessage(fmt.Sprintf(`{
 			"type":"object",
@@ -118,7 +118,13 @@ func (t BashTool) Execute(ctx context.Context, args map[string]any) (Result, err
 
 		<-done
 
-		return Result{Text: cw.String() + fmt.Sprintf("\n[command timed out after %ds]", timeout)}, nil
+		text := cw.String() + fmt.Sprintf("\n[command timed out after %ds]", timeout)
+
+		// The run loop renders a tool error as "tool error: %v" and discards
+		// Result, so the captured output has to ride the error or the model
+		// loses the diagnostic. Returning an error is what makes the loop's
+		// failure counter see a command that did not succeed.
+		return Result{Text: text}, errors.New(text)
 	case <-ctx.Done():
 		_ = syscall.Kill(-pgid, syscall.SIGKILL) //nolint:errcheck
 
@@ -135,6 +141,8 @@ func (t BashTool) Execute(ctx context.Context, args map[string]any) (Result, err
 			res += "\n[stopped reading output: a background process still holds the output pipe]"
 		case werr != nil:
 			res += fmt.Sprintf("\n[command exited with error: %v]", werr)
+
+			return Result{Text: res}, errors.New(res)
 		}
 
 		return Result{Text: res}, nil
