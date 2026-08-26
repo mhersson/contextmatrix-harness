@@ -31,6 +31,8 @@ func TestBashNonZeroExitReturnsError(t *testing.T) {
 		"the error must carry the captured output; the run loop discards Result on the error path")
 	assert.Contains(t, res.Text, "marker-out",
 		"Result.Text must also carry the output, for any future consumer that stops discarding it")
+	assert.Contains(t, err.Error(), "exit status 3",
+		"a silent failure must still report its exit status")
 }
 
 func TestBashTimeoutReturnsError(t *testing.T) {
