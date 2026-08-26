@@ -555,9 +555,12 @@ func TestRunTerminatingToolExecuteErrorDoesNotTerminate(t *testing.T) {
 	assert.Equal(t, 1, res.ToolCallFailures)
 }
 
-// A shell command that exits non-zero is a domain failure the run loop must
-// count, so operators can see failing commands in the tool-failure counter.
-func TestRunCountsFailingBashAsToolFailure(t *testing.T) {
+// A shell command that completes with a non-zero exit is not a tool failure -
+// bash is the one tool whose command is arbitrary, so many commands (a
+// no-match grep, `test`, `diff --quiet`) use their own exit status as a
+// normal boolean result. The run loop must count it separately from
+// ToolCallFailures, which stays reserved for the tool itself failing.
+func TestRunCountsNonZeroBashExitSeparatelyFromToolFailures(t *testing.T) {
 	reg := tools.NewRegistry(tools.NewBashTool(t.TempDir()))
 
 	f := &fakeLLM{responses: []llm.Response{
@@ -568,12 +571,36 @@ func TestRunCountsFailingBashAsToolFailure(t *testing.T) {
 	res, err := Run(context.Background(), f, reg, newEmitter(), "do it", Config{MaxTurns: 10})
 	require.NoError(t, err)
 
-	assert.Equal(t, 1, res.ToolCallFailures)
+	assert.Equal(t, 1, res.NonZeroExitCount, "a completed non-zero exit is counted on its own counter")
+	assert.Equal(t, 0, res.ToolCallFailures, "the command completed; the tool itself did not fail")
 }
 
-// A failing command is not evidence the model cannot form tool arguments.
-// The incapability classifier counts only unparseable arguments.
-func TestFailingBashDoesNotAdvanceIncapability(t *testing.T) {
+// A timeout is the opposite case: the command did NOT complete, so it stays a
+// genuine tool failure, and the captured output must still ride the error
+// since the run loop discards Result on the error path.
+func TestRunCountsBashTimeoutAsToolFailure(t *testing.T) {
+	reg := tools.NewRegistry(tools.NewBashTool(t.TempDir()))
+
+	f := &fakeLLM{responses: []llm.Response{
+		{ToolCalls: []llm.ToolCall{toolCall("1", "bash", `{"command":"sleep 5","timeout_seconds":1}`)}},
+		{Content: "gave up", FinishReason: "stop"},
+	}}
+
+	res, err := Run(context.Background(), f, reg, newEmitter(), "do it", Config{MaxTurns: 10})
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, res.ToolCallFailures, "a timeout is a genuine tool failure: the command never completed")
+	assert.Equal(t, 0, res.NonZeroExitCount, "a command that never completed has no exit status to report")
+
+	content, ok := findToolResult(res.Messages, "1")
+	require.True(t, ok, "expected a tool-result message for the bash call")
+	assert.Contains(t, content, "timed out", "the timeout diagnostic must still reach the model")
+}
+
+// A non-zero exit is not evidence the model cannot form tool arguments. The
+// incapability classifier counts only unparseable arguments, so three
+// consecutive non-zero-exit calls must not trip it.
+func TestNonZeroExitBashDoesNotAdvanceIncapability(t *testing.T) {
 	reg := tools.NewRegistry(tools.NewBashTool(t.TempDir()))
 
 	badCall := toolCall("1", "bash", `{"command":"exit 1"}`)
@@ -589,12 +616,13 @@ func TestFailingBashDoesNotAdvanceIncapability(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.NotEqual(t, ReasonIncapable, res.Reason)
-	assert.Equal(t, 3, res.ToolCallFailures)
+	assert.Equal(t, 3, res.NonZeroExitCount)
+	assert.Equal(t, 0, res.ToolCallFailures)
 }
 
-// The failing command's own output is the diagnostic; the error path must not
-// replace it with a bare status.
-func TestFailingBashOutputReachesModel(t *testing.T) {
+// The completed command's own output is the diagnostic; the success path
+// must carry it exactly as any other tool result.
+func TestNonZeroExitBashOutputReachesModel(t *testing.T) {
 	reg := tools.NewRegistry(tools.NewBashTool(t.TempDir()))
 
 	f := &fakeLLM{responses: []llm.Response{
@@ -605,16 +633,42 @@ func TestFailingBashOutputReachesModel(t *testing.T) {
 	res, err := Run(context.Background(), f, reg, newEmitter(), "do it", Config{MaxTurns: 10})
 	require.NoError(t, err)
 
-	var toolResult *llm.Message
+	content, ok := findToolResult(res.Messages, "1")
+	require.True(t, ok, "expected a tool-result message for the bash call")
+	assert.Contains(t, content, "diagnostic-marker")
+}
 
-	for i := range res.Messages {
-		if res.Messages[i].Role == "tool" && res.Messages[i].ToolCallID == "1" {
-			toolResult = &res.Messages[i]
+// The friction analysis this card responds to reads transcripts, not just
+// counters, so the exit code must reach the tool_result event as well as the
+// Result struct.
+func TestNonZeroExitBashExitCodeReachesEvent(t *testing.T) {
+	reg := tools.NewRegistry(tools.NewBashTool(t.TempDir()))
+
+	f := &fakeLLM{responses: []llm.Response{
+		{ToolCalls: []llm.ToolCall{toolCall("1", "bash", `{"command":"exit 7"}`)}},
+		{Content: "gave up", FinishReason: "stop"},
+	}}
+
+	var transcript bytes.Buffer
+
+	emit := events.NewEmitter(nil, &transcript)
+
+	_, err := Run(context.Background(), f, reg, emit, "do it", Config{MaxTurns: 10})
+	require.NoError(t, err)
+
+	var found bool
+
+	for _, ev := range parseEvents(t, transcript.String()) {
+		if ev.Kind == events.ToolResult && ev.Data["id"] == "1" {
+			exitCode, isNumber := ev.Data["exit_code"].(float64)
+			require.True(t, isNumber, "exit_code must be present and numeric on the tool_result event")
+			assert.Equal(t, 7, int(exitCode), "the exit code must reach the tool_result event")
+
+			found = true
 		}
 	}
 
-	require.NotNil(t, toolResult, "expected a tool-result message for the bash call")
-	assert.Contains(t, toolResult.Content, "diagnostic-marker")
+	assert.True(t, found, "expected a tool_result event for the bash call")
 }
 
 func TestRunTerminatingToolParseErrorDoesNotTerminate(t *testing.T) {

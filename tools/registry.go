@@ -15,6 +15,12 @@ import (
 type Result struct {
 	Text   string
 	Images []llm.ImageURL
+	// ExitCode is the shell exit status of a command a tool ran, when that
+	// tool ran a subprocess to completion. Zero means either the process
+	// exited successfully or the tool never ran a subprocess at all - the
+	// two are indistinguishable here, so a caller that needs to tell them
+	// apart must know the calling tool's own contract.
+	ExitCode int
 }
 
 type Tool interface {

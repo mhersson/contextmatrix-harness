@@ -54,7 +54,7 @@ func (t BashTool) Schema() llm.Tool {
 	return llm.Tool{Type: "function", Function: llm.ToolFunction{
 		Name: "bash",
 		Description: fmt.Sprintf(
-			"Run a shell command in the workspace root (%s) and return combined stdout+stderr. A non-zero exit or a timeout is reported as a tool failure, with the captured output.",
+			"Run a shell command in the workspace root (%s) and return combined stdout+stderr, plus its exit code. A completed command's exit code is not itself a tool failure - many commands use a non-zero exit as a normal result (no matches, a failed check). Only a timeout is reported as a tool failure.",
 			t.root),
 		Parameters: json.RawMessage(fmt.Sprintf(`{
 			"type":"object",
@@ -133,6 +133,7 @@ func (t BashTool) Execute(ctx context.Context, args map[string]any) (Result, err
 		return Result{Text: cw.String()}, ctx.Err()
 	case werr := <-done:
 		res := cw.String()
+		exitCode := 0
 
 		switch {
 		case errors.Is(werr, exec.ErrWaitDelay):
@@ -140,11 +141,17 @@ func (t BashTool) Execute(ctx context.Context, args map[string]any) (Result, err
 			// holds the output pipe. Not a command failure.
 			res += "\n[stopped reading output: a background process still holds the output pipe]"
 		case werr != nil:
-			res += fmt.Sprintf("\n[command exited with error: %v]", werr)
+			// The command completed; a non-zero exit is its own result, not a
+			// tool failure - many commands use it as a boolean (grep, test,
+			// diff --quiet). Report the status as data, not as an error.
+			var exitErr *exec.ExitError
+			if errors.As(werr, &exitErr) {
+				exitCode = exitErr.ExitCode()
+			}
 
-			return Result{Text: res}, errors.New(res)
+			res += fmt.Sprintf("\n[command exited with status %d]", exitCode)
 		}
 
-		return Result{Text: res}, nil
+		return Result{Text: res, ExitCode: exitCode}, nil
 	}
 }

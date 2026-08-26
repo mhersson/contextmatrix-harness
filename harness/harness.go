@@ -113,8 +113,14 @@ type Result struct {
 	CacheCreationTokens int64
 	ToolCallCount       int
 	ToolCallFailures    int
-	RepairCount         int
-	ModelUsed           string
+	// NonZeroExitCount counts tool calls that completed but whose
+	// tools.Result.ExitCode was non-zero. It is deliberately separate from
+	// ToolCallFailures: the tool ran to completion and reported its own
+	// result, which many shell commands use as a boolean (grep, test,
+	// diff --quiet) rather than as evidence the tool itself failed.
+	NonZeroExitCount int
+	RepairCount      int
+	ModelUsed        string
 	// IncapableDetail is set only when Reason == ReasonIncapable and the
 	// failed argument payloads matched an upstream-defect pattern; empty
 	// otherwise, including in interactive mode, which never returns
@@ -649,7 +655,14 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 				msgs = append(msgs, toolResultMsg(tc.ID, text))
 				turnImages = append(turnImages, out.Images...) // nil-safe; images delivered after the batch
 
-				emit.Emit(events.ToolResult, map[string]any{"id": tc.ID, "output_len": len(text)})
+				resultEvent := map[string]any{"id": tc.ID, "output_len": len(text)}
+
+				if out.ExitCode != 0 {
+					res.NonZeroExitCount++
+					resultEvent["exit_code"] = out.ExitCode
+				}
+
+				emit.Emit(events.ToolResult, resultEvent)
 
 				if repeatKey != "" {
 					repeated[repeatKey] = res.Turns

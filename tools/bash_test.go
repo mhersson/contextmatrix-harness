@@ -19,20 +19,40 @@ func TestBashToolRunsInRoot(t *testing.T) {
 	assert.Contains(t, out.Text, root)
 }
 
-func TestBashNonZeroExitReturnsError(t *testing.T) {
+// A command that exits non-zero with NO output at all reads worst as a tool
+// error: many commands (a no-match grep, `test`, `diff --quiet`) use exactly
+// this shape - empty output, non-zero status - to mean a normal negative
+// result, not a breakage. The completed command must not be a Go error; its
+// status must still be visible, since there is nothing else in the output to
+// tell the model what happened.
+func TestBashNoOutputNonZeroExitReportsSuccess(t *testing.T) {
+	t.Parallel()
+
+	tool := NewBashTool(t.TempDir())
+
+	res, err := tool.Execute(t.Context(), map[string]any{"command": "exit 1"})
+
+	require.NoError(t, err, "a completed command's exit code is its own result, not a tool failure")
+	assert.Contains(t, res.Text, "exited with status 1",
+		"the status must be visible in Result.Text; it is the only diagnostic a silent command leaves")
+	assert.Equal(t, 1, res.ExitCode, "the exit code must reach Result for callers that inspect it")
+}
+
+// A failing build-shaped command (non-zero exit, with output) is the other
+// half of the same contract: the command completed, so it is not a tool
+// error, but both its own output and its status must still reach the model
+// and the exit code must reach Result.
+func TestBashFailingCommandReportsOutputStatusAndExitCode(t *testing.T) {
 	t.Parallel()
 
 	tool := NewBashTool(t.TempDir())
 
 	res, err := tool.Execute(t.Context(), map[string]any{"command": "echo marker-out; exit 3"})
 
-	require.Error(t, err, "a non-zero exit must surface as a tool error")
-	assert.Contains(t, err.Error(), "marker-out",
-		"the error must carry the captured output; the run loop discards Result on the error path")
-	assert.Contains(t, res.Text, "marker-out",
-		"Result.Text must also carry the output, for any future consumer that stops discarding it")
-	assert.Contains(t, err.Error(), "exit status 3",
-		"a silent failure must still report its exit status")
+	require.NoError(t, err, "a completed command's exit code is its own result, not a tool failure")
+	assert.Contains(t, res.Text, "marker-out", "the command's own output must still reach the model")
+	assert.Contains(t, res.Text, "exited with status 3", "the status must be visible alongside the output")
+	assert.Equal(t, 3, res.ExitCode)
 }
 
 func TestBashTimeoutReturnsError(t *testing.T) {
@@ -59,6 +79,7 @@ func TestBashZeroExitUnchanged(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Contains(t, res.Text, "ok")
+	assert.Equal(t, 0, res.ExitCode)
 }
 
 func TestBashTimeoutClamp(t *testing.T) {
@@ -207,8 +228,10 @@ func TestBashToolBackgroundDaemonReturnsPromptly(t *testing.T) {
 		assert.Less(t, time.Since(start), 10*time.Second)
 		assert.Contains(t, o.out.Text, "started")
 		// ErrWaitDelay is expected plumbing, not a command failure - it must be
-		// mapped to a calm note, not "[command exited with error: ...]".
-		assert.NotContains(t, o.out.Text, "command exited with error")
+		// mapped to a calm note, not the "[command exited with status N]" suffix
+		// a completed non-zero exit gets.
+		assert.NotContains(t, o.out.Text, "exited with status")
+		assert.Equal(t, 0, o.out.ExitCode, "a background process holding the pipe is not a command exit status")
 	case <-time.After(15 * time.Second):
 		t.Fatal("Execute did not return; background daemon holding the pipe wedged Wait")
 	}
