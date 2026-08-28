@@ -226,6 +226,55 @@ func TestGraceTurnDeclinedStaysMaxTurns(t *testing.T) {
 	assert.False(t, fin.called)
 }
 
+func TestGraceTurnSkippedWhenCostCapCrossedOnFinalTurn(t *testing.T) {
+	fin := &graceFinishTool{}
+	reg := tools.NewRegistry(tools.NewReadTool(t.TempDir()), fin)
+
+	// 3 burn turns; the third's cost pushes TotalCostUSD past MaxCostUSD. The
+	// loop-top check never catches this - it only runs before a turn starts,
+	// and this run exits on MaxTurns after the turn that crossed the cap. The
+	// grace turn must not spend an extra model call once the cap is already
+	// crossed.
+	w := &burnLLM{responses: []llm.Response{
+		{ToolCalls: []llm.ToolCall{toolCall("1", "read", `{"path":"missing1"}`)}, Usage: llm.Usage{Cost: 0.2}},
+		{ToolCalls: []llm.ToolCall{toolCall("2", "read", `{"path":"missing2"}`)}, Usage: llm.Usage{Cost: 0.2}},
+		{ToolCalls: []llm.ToolCall{toolCall("3", "read", `{"path":"missing3"}`)}, Usage: llm.Usage{Cost: 0.2}},
+	}}
+
+	res, err := Run(context.Background(), w, reg, newEmitter(), "task", Config{
+		MaxTurns: 3, GraceTurn: true, MaxCostUSD: 0.5,
+	})
+	require.NoError(t, err)
+	assert.False(t, res.Completed)
+	assert.Equal(t, "max_turns", res.Reason)
+	assert.False(t, fin.called)
+
+	// 3 burn requests only - no grace call once the cap is crossed.
+	require.Len(t, w.requests, 3)
+}
+
+func TestGraceTurnRunsWhenUnderCostCap(t *testing.T) {
+	fin := &graceFinishTool{}
+	reg := tools.NewRegistry(tools.NewReadTool(t.TempDir()), fin)
+
+	w := &burnLLM{responses: []llm.Response{
+		{ToolCalls: []llm.ToolCall{toolCall("1", "read", `{"path":"missing1"}`)}, Usage: llm.Usage{Cost: 0.1}},
+		{ToolCalls: []llm.ToolCall{toolCall("2", "read", `{"path":"missing2"}`)}, Usage: llm.Usage{Cost: 0.1}},
+		{ToolCalls: []llm.ToolCall{toolCall("3", "read", `{"path":"missing3"}`)}, Usage: llm.Usage{Cost: 0.1}},
+		{ToolCalls: []llm.ToolCall{toolCall("4", "finish", `{"commit_message":"done"}`)}},
+	}}
+
+	res, err := Run(context.Background(), w, reg, newEmitter(), "task", Config{
+		MaxTurns: 3, GraceTurn: true, MaxCostUSD: 0.5,
+	})
+	require.NoError(t, err)
+	assert.True(t, res.Completed, "under the cap, the grace turn still runs")
+	assert.True(t, fin.called)
+
+	// 3 burn requests + 1 grace call.
+	require.Len(t, w.requests, 4)
+}
+
 func TestGraceTurnSkippedWithoutTerminalTool(t *testing.T) {
 	reg := tools.NewRegistry(tools.NewReadTool(t.TempDir()))
 	w := &burnLLM{}

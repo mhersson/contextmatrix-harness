@@ -237,7 +237,7 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 	// MaxTurns>0 per-exchange backstop in interactive mode is deferred;
 	// chat uses MaxTurns=0 (unbounded). Non-interactive behavior is byte-identical.
 	for cfg.Interactive || res.Turns < cfg.MaxTurns {
-		if cfg.MaxCostUSD > 0 && res.TotalCostUSD >= cfg.MaxCostUSD {
+		if costCapExceeded(cfg, res) {
 			res.Reason = "max_cost"
 			emit.Emit(events.StateChange, map[string]any{"stop": "max_cost", "cost_usd": res.TotalCostUSD})
 
@@ -737,7 +737,7 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 		}
 	}
 
-	if cfg.GraceTurn && !cfg.Interactive {
+	if cfg.GraceTurn && !cfg.Interactive && !costCapExceeded(cfg, res) {
 		if graceFinish(ctx, client, reg, emit, cfg, msgs, &res) {
 			return res, nil
 		}
@@ -784,6 +784,13 @@ func awaitNext(ctx context.Context, cfg Config, msgs []llm.Message, emit *events
 	msgs = append(msgs, llm.Message{Role: "user", Content: um.Content})
 
 	return msgs, "continue", nil
+}
+
+// costCapExceeded reports whether res has already reached cfg.MaxCostUSD.
+// MaxCostUSD<=0 means the cap is disabled, so this is always false - the loop
+// top and the grace-turn gate share this one comparison.
+func costCapExceeded(cfg Config, res Result) bool {
+	return cfg.MaxCostUSD > 0 && res.TotalCostUSD >= cfg.MaxCostUSD
 }
 
 // readOnlyTool reports whether t is a ReadOnly, non-Terminal tool - the tool
