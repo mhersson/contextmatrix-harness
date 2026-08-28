@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -168,21 +169,25 @@ func TestExtraReadRootsRejectedAtConstruction(t *testing.T) {
 	require.NoError(t, os.Symlink("/", linkToSlash))
 
 	tests := []struct {
-		name string
-		root string
+		name   string
+		root   string
+		reason DropReason
 	}{
-		{name: "empty", root: ""},
-		{name: "filesystem root", root: "/"},
-		{name: "a prefix of the workspace", root: parent},
-		{name: "a symlink to a prefix of the workspace", root: linkToParent},
-		{name: "a symlink to the filesystem root", root: linkToSlash},
-		{name: "a relative path", root: "dep"},
+		{name: "empty", root: "", reason: DropReasonRelative},
+		{name: "filesystem root", root: "/", reason: DropReasonFilesystemRoot},
+		{name: "a prefix of the workspace", root: parent, reason: DropReasonWorkspaceParent},
+		{name: "a symlink to a prefix of the workspace", root: linkToParent, reason: DropReasonWorkspaceParent},
+		{name: "a symlink to the filesystem root", root: linkToSlash, reason: DropReasonFilesystemRoot},
+		{name: "a relative path", root: "dep", reason: DropReasonRelative},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Empty(t, sanitizeReadRoots(f.workspace, []string{tc.root}),
-				"a root that would widen past the workspace is dropped")
+			result := sanitizeReadRoots(f.workspace, []string{tc.root})
+			assert.Empty(t, result.Effective, "a root that would widen past the workspace is dropped")
+			require.Len(t, result.Dropped, 1)
+			assert.Equal(t, tc.root, result.Dropped[0].Root)
+			assert.Equal(t, tc.reason, result.Dropped[0].Reason)
 
 			// And the tool built with it still refuses a path it would have opened.
 			_, err := NewReadTool(f.workspace).WithReadRoots([]string{tc.root}).
@@ -231,13 +236,139 @@ func TestUnresolvableReadRootIsDropped(t *testing.T) {
 
 	deps := filepath.Join(base, "deps") // not mounted yet
 
-	assert.Empty(t, sanitizeReadRoots(ws, []string{deps}), "an unresolvable root is dropped at construction")
+	result := sanitizeReadRoots(ws, []string{deps})
+	assert.Empty(t, result.Effective, "an unresolvable root is dropped at construction")
+	require.Equal(t, []DroppedReadRoot{{Root: deps, Reason: DropReasonNonexistent}}, result.Dropped)
 
 	tool := NewReadTool(ws).WithReadRoots([]string{deps})
+	assert.Equal(t, result, tool.ReadRoots(), "the tool exposes the same sanitize outcome the caller can query")
 
 	// The path appears later, as a symlink to the workspace's parent.
 	require.NoError(t, os.Symlink(base, deps))
 
 	_, err := tool.Execute(context.Background(), map[string]any{"path": filepath.Join(base, "secret.txt")})
 	require.Error(t, err, "a root dropped at construction cannot be revived by the filesystem")
+}
+
+// TestReadRootsAccessorReflectsConfiguration pins the observability decision
+// for grep and glob too, not just read: the caller can ask each tool, after
+// construction, which extra roots survived and which were dropped and why.
+func TestReadRootsAccessorReflectsConfiguration(t *testing.T) {
+	f := newReadRootFixture(t)
+
+	roots := []string{f.dep, "relative"}
+
+	grepRoots := NewGrepTool(f.workspace).WithReadRoots(roots).ReadRoots()
+	globRoots := NewGlobTool(f.workspace).WithReadRoots(roots).ReadRoots()
+
+	for _, got := range []ReadRoots{grepRoots, globRoots} {
+		require.Len(t, got.Effective, 1)
+		assert.Contains(t, got.Effective[0], filepath.Base(f.dep))
+		require.Len(t, got.Dropped, 1)
+		assert.Equal(t, "relative", got.Dropped[0].Root)
+		assert.Equal(t, DropReasonRelative, got.Dropped[0].Reason)
+	}
+}
+
+// TestSchemaDescriptionMentionsRootsWhenConfigured pins the discoverability
+// decision: read/grep/glob's schema description names the extra read-only
+// roots when WithReadRoots configured any that survived, and says nothing
+// about them otherwise - the plain, unconfigured tool's description is
+// unchanged.
+func TestSchemaDescriptionMentionsRootsWhenConfigured(t *testing.T) {
+	f := newReadRootFixture(t)
+
+	cases := []struct {
+		name       string
+		plainDesc  string
+		configured string
+	}{
+		{
+			name:       "read",
+			plainDesc:  NewReadTool(f.workspace).Schema().Function.Description,
+			configured: NewReadTool(f.workspace).WithReadRoots([]string{f.dep}).Schema().Function.Description,
+		},
+		{
+			name:       "grep",
+			plainDesc:  NewGrepTool(f.workspace).Schema().Function.Description,
+			configured: NewGrepTool(f.workspace).WithReadRoots([]string{f.dep}).Schema().Function.Description,
+		},
+		{
+			name:       "glob",
+			plainDesc:  NewGlobTool(f.workspace).Schema().Function.Description,
+			configured: NewGlobTool(f.workspace).WithReadRoots([]string{f.dep}).Schema().Function.Description,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.NotContains(t, tc.plainDesc, f.dep, "an unconfigured tool's schema says nothing about extra roots")
+			assert.Contains(t, tc.configured, f.dep, "a configured tool's schema names the permitted root")
+		})
+	}
+}
+
+// pathParamDescription extracts the "path" property's own JSON schema
+// description out of a tool's Parameters - it also proves the dynamically
+// spliced JSON is still valid JSON, since json.Unmarshal fails loudly on a
+// malformed template.
+func pathParamDescription(t *testing.T, parameters json.RawMessage) string {
+	t.Helper()
+
+	var schema struct {
+		Properties map[string]struct {
+			Description string `json:"description"`
+		} `json:"properties"`
+	}
+
+	require.NoError(t, json.Unmarshal(parameters, &schema))
+
+	return schema.Properties["path"].Description
+}
+
+// TestSchemaPathParamConsistentWithRootsClause is the ride-along fix: the
+// per-parameter "path" description must not keep reading as workspace-only
+// when the tool-level Description clause says an absolute path into a
+// configured extra root is also accepted - and must stay exactly as before
+// when no extra roots are configured, mirroring extraRootsSchemaClause's own
+// "only when configured" gating.
+func TestSchemaPathParamConsistentWithRootsClause(t *testing.T) {
+	f := newReadRootFixture(t)
+
+	cases := []struct {
+		name         string
+		baseline     string
+		unconfigured json.RawMessage
+		configured   json.RawMessage
+	}{
+		{
+			name:         "read",
+			baseline:     "file path relative to the workspace root",
+			unconfigured: NewReadTool(f.workspace).Schema().Function.Parameters,
+			configured:   NewReadTool(f.workspace).WithReadRoots([]string{f.dep}).Schema().Function.Parameters,
+		},
+		{
+			name:         "grep",
+			baseline:     "optional subpath under the workspace root to search",
+			unconfigured: NewGrepTool(f.workspace).Schema().Function.Parameters,
+			configured:   NewGrepTool(f.workspace).WithReadRoots([]string{f.dep}).Schema().Function.Parameters,
+		},
+		{
+			name:         "glob",
+			baseline:     "optional subpath under the workspace root to search",
+			unconfigured: NewGlobTool(f.workspace).Schema().Function.Parameters,
+			configured:   NewGlobTool(f.workspace).WithReadRoots([]string{f.dep}).Schema().Function.Parameters,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			unconfigured := pathParamDescription(t, tc.unconfigured)
+			configured := pathParamDescription(t, tc.configured)
+
+			assert.Equal(t, tc.baseline, unconfigured, "no extra roots: the param text is byte-identical to before")
+			assert.Contains(t, configured, "absolute", "extra roots configured: the param text stops implying workspace-only")
+			assert.NotEqual(t, unconfigured, configured)
+		})
+	}
 }

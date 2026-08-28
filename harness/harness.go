@@ -25,6 +25,13 @@ const defaultIncapableThreshold = 3
 // ever execute successfully, indicating it cannot drive the tool loop.
 const ReasonIncapable = "incapable"
 
+// postTerminalResult answers a tool call batched after a terminating call
+// succeeded. The call is never dispatched - the run has ended and the terminal
+// call's outward report was computed before any such side effect could land -
+// but it still owes a result, because the assistant message references its ID.
+// The model reads this text, so it states the fact and nothing else.
+const postTerminalResult = "unexecuted: an earlier call in this batch ended the run"
+
 // contextLimitThreshold is the fraction of the model's context window that, once
 // the prompt reaches it, makes the harness stop and return incomplete when no
 // Compaction is configured. With Config.Compaction set, in-window compaction
@@ -221,15 +228,6 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 	// nudged guards the one-shot wrap-up injection.
 	nudged := false
 
-	// repeated maps "<tool>\x00<normalized args>" to the turn that already made
-	// that call, so an identical read-only call is answered from the record
-	// instead of spending the call again. It is cleared whenever the state its
-	// entries describe may have moved: any call to a tool the harness cannot
-	// prove side-effect-free, a compaction (the model genuinely lost the earlier
-	// result), or a human interjection.
-	repeated := map[string]int{}
-	humanMsgs := humanTurns(msgs)
-
 	// batchNudged guards the one-shot batching injection; singleBatchTurns counts
 	// the consecutive turns that each spent a whole model call on one read-only
 	// tool call. Any other turn shape resets it.
@@ -239,7 +237,7 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 	// MaxTurns>0 per-exchange backstop in interactive mode is deferred;
 	// chat uses MaxTurns=0 (unbounded). Non-interactive behavior is byte-identical.
 	for cfg.Interactive || res.Turns < cfg.MaxTurns {
-		if cfg.MaxCostUSD > 0 && res.TotalCostUSD >= cfg.MaxCostUSD {
+		if costCapExceeded(cfg, res) {
 			res.Reason = "max_cost"
 			emit.Emit(events.StateChange, map[string]any{"stop": "max_cost", "cost_usd": res.TotalCostUSD})
 
@@ -247,22 +245,6 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 		}
 
 		msgs = drainInbox(cfg, msgs, emit)
-
-		// Every path that delivers human input appends a plain-text user message
-		// and comes back through the top of this loop, so one check here covers
-		// the mid-batch drain, the await-input recovery and the no-tool-call
-		// branch alike. A human who says a file changed must not be answered
-		// from a skipped call.
-		//
-		// Growth only: compaction REMOVES user messages, and its own reset below
-		// owns that case - counting a decrease here would hide it.
-		if n := humanTurns(msgs); n > humanMsgs {
-			humanMsgs = n
-
-			clear(repeated)
-		} else {
-			humanMsgs = n
-		}
 
 		if !cfg.Interactive && cfg.WrapUpTurns > 0 && !nudged &&
 			cfg.MaxTurns-res.Turns == cfg.WrapUpTurns {
@@ -274,7 +256,6 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 			}
 
 			msgs = append(msgs, llm.Message{Role: "user", Content: msg})
-			humanMsgs++ // synthetic, not human: must not invalidate the repeat guard
 
 			emit.Emit(events.StateChange, map[string]any{"event": "wrap_up_nudge", "turns_remaining": cfg.WrapUpTurns})
 		} else if cfg.BatchNudgeTurns > 0 && !batchNudged && !nudged &&
@@ -290,7 +271,6 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 			}
 
 			msgs = append(msgs, llm.Message{Role: "user", Content: msg})
-			humanMsgs++ // synthetic, not human: must not invalidate the repeat guard
 
 			emit.Emit(events.StateChange, map[string]any{"event": "batch_nudge", "single_call_turns": singleBatchTurns})
 		}
@@ -374,6 +354,13 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 			"prompt_tokens": prompt, "completion_tokens": resp.Usage.CompletionTokens,
 			"cost_usd": resp.Usage.Cost, "model": cfg.Model,
 			"cache_read_tokens": cacheRead, "cache_creation_tokens": cacheCreation,
+			// wire_prompt_tokens is the raw pre-normalization wire value
+			// (Usage.PromptTokens, untouched by Buckets()): equal to
+			// prompt_tokens on an already-disjoint wire, larger when the
+			// subset subtraction ran. Makes rows self-describing across a
+			// mixed-version fleet without changing the meaning of the
+			// existing prompt_tokens field.
+			"wire_prompt_tokens": resp.Usage.PromptTokens,
 		})
 
 		if cfg.ContextWindow > 0 {
@@ -396,11 +383,8 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 							"prompt_tokens": cPrompt, "completion_tokens": cUsage.CompletionTokens,
 							"cost_usd": cUsage.Cost, "model": cfg.Model, "phase": "compaction",
 							"cache_read_tokens": cCacheRead, "cache_creation_tokens": cCacheCreation,
+							"wire_prompt_tokens": cUsage.PromptTokens,
 						})
-
-						// The summary replaced the earlier tool results, so the model
-						// has genuinely lost them: a repeat is a real request now.
-						clear(repeated)
 					}
 
 					if cerr == nil && len(newMsgs) < len(msgs) {
@@ -524,16 +508,27 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 		turnReadOnly := false
 
 		// terminated is set when a tools.Terminal tool executes successfully this
-		// turn; completionArgs carries that call's normalized arguments. The
-		// first terminal call in a batch wins.
+		// turn; completionArgs carries that call's normalized arguments. Once it
+		// is set no further call in the batch is dispatched, so the first terminal
+		// call in a batch wins.
 		terminated := false
 
 		var completionArgs json.RawMessage
 
 		for i, tc := range resp.ToolCalls {
 			if interrupted {
-				msgs = append(msgs, toolResultMsg(tc.ID, "skipped: user interjected"))
-				emit.Emit(events.ToolResult, map[string]any{"id": tc.ID, "skipped": true})
+				msgs = append(msgs, skipToolCall(emit, tc, "skipped: user interjected", nil))
+
+				continue
+			}
+
+			// The run ended earlier in this batch: answer the remaining calls
+			// without dispatching them. Executing them would land side effects
+			// after the terminal call already reported completion outward, and a
+			// second terminal call would report twice - tools.Terminal carries no
+			// idempotency contract.
+			if terminated {
+				msgs = append(msgs, skipToolCall(emit, tc, postTerminalResult, map[string]any{"already_terminated": true}))
 
 				continue
 			}
@@ -582,46 +577,8 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 				// loop regardless of whether Execute succeeds or returns a domain error.
 				turnHadCapableTool = true
 
-				// repeatKey is set only for a read-only call that reaches Execute;
-				// it is recorded after a SUCCESS, because a failed call produced no
-				// result for a later identical call to be pointed at.
-				repeatKey := ""
-
-				if !readOnlyTool(tool) {
-					// Not provably side-effect-free: assume it moved the state every
-					// recorded result describes. Cheap to be wrong this way; the
-					// opposite costs correctness.
-					clear(repeated)
-				} else {
-					key := tc.Function.Name + "\x00" + normalizeArgs(tc.Function.Arguments)
-					if prev, seen := repeated[key]; seen {
-						msg := fmt.Sprintf("skipped: an identical %s call was already made at turn %d and nothing since could have changed its result - use that result", tc.Function.Name, prev)
-
-						msgs = append(msgs, toolResultMsg(tc.ID, msg))
-						emit.Emit(events.ToolResult, map[string]any{"id": tc.ID, "skipped": true, "repeat_of_turn": prev})
-
-						return
-					}
-
-					repeatKey = key
-
-					// Counted here, not above the skip: a call the guard answered from
-					// the record spent no round trip on a lookup, so it is not the turn
-					// shape the batching nudge exists to catch. A model repeating one
-					// call is looping, and a nudge to batch would misdiagnose it.
+				if readOnlyTool(tool) {
 					turnReadOnly = true
-				}
-
-				// A terminal call ends the run; a second one in the same batch must not
-				// execute the tool again. tools.Terminal carries no idempotency
-				// contract, and a terminal tool typically reports completion outward.
-				if term, isTerminal := tool.(tools.Terminal); isTerminal && term.Terminal() && terminated {
-					msg := "skipped: an earlier call in this batch already ended the run"
-
-					msgs = append(msgs, toolResultMsg(tc.ID, msg))
-					emit.Emit(events.ToolResult, map[string]any{"id": tc.ID, "skipped": true, "already_terminated": true})
-
-					return
 				}
 
 				out, err := tool.Execute(ctx, args)
@@ -651,19 +608,16 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 
 				emit.Emit(events.ToolResult, map[string]any{"id": tc.ID, "output_len": len(text)})
 
-				if repeatKey != "" {
-					repeated[repeatKey] = res.Turns
-				}
-
-				if term, isTerminal := tool.(tools.Terminal); isTerminal && term.Terminal() && !terminated {
+				if term, isTerminal := tool.(tools.Terminal); isTerminal && term.Terminal() {
 					terminated = true
 					completionArgs = json.RawMessage(normalizeArgs(tc.Function.Arguments))
 				}
 			}()
 
 			// Drain mid-batch only if there are remaining calls to skip. A batch
-			// that already terminated runs to the end regardless: the assistant
-			// message references every call ID, so every one still owes a result.
+			// that already terminated is walked to the end regardless: the
+			// assistant message references every call ID, so every one still owes
+			// a result.
 			if cfg.Inbox != nil && !terminated && i < len(resp.ToolCalls)-1 {
 				if pending := cfg.Inbox.Drain(); len(pending) > 0 {
 					interrupted = true
@@ -672,9 +626,9 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 			}
 		}
 
-		// A terminal call ends the run only once the whole batch has executed:
-		// returning mid-batch would drop the calls after it, leaving their IDs
-		// unanswered in the history this run carries out.
+		// A terminal call ends the run only once the whole batch has been
+		// answered: returning mid-batch would drop the calls after it, leaving
+		// their IDs unanswered in the history this run carries out.
 		if terminated {
 			res.Completed = true
 			res.Reason = "done"
@@ -786,7 +740,7 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 		}
 	}
 
-	if cfg.GraceTurn && !cfg.Interactive {
+	if cfg.GraceTurn && !cfg.Interactive && !costCapExceeded(cfg, res) {
 		if graceFinish(ctx, client, reg, emit, cfg, msgs, &res) {
 			return res, nil
 		}
@@ -835,22 +789,11 @@ func awaitNext(ctx context.Context, cfg Config, msgs []llm.Message, emit *events
 	return msgs, "continue", nil
 }
 
-// humanTurns counts plain-text user messages: the seeded task, any history
-// seed, and every human interjection. Tool-image messages carry ContentParts
-// instead and are excluded - they come from tool output, not from someone who
-// may have changed the workspace. The synthetic nudges are excluded too: each
-// injection site advances humanMsgs itself, so a message the harness wrote to
-// itself is never mistaken for a human who may have changed a file.
-func humanTurns(msgs []llm.Message) int {
-	n := 0
-
-	for _, m := range msgs {
-		if m.Role == "user" && m.ContentParts == nil {
-			n++
-		}
-	}
-
-	return n
+// costCapExceeded reports whether res has already reached cfg.MaxCostUSD.
+// MaxCostUSD<=0 means the cap is disabled, so this is always false - the loop
+// top and the grace-turn gate share this one comparison.
+func costCapExceeded(cfg Config, res Result) bool {
+	return cfg.MaxCostUSD > 0 && res.TotalCostUSD >= cfg.MaxCostUSD
 }
 
 // readOnlyTool reports whether t is a ReadOnly, non-Terminal tool - the tool
@@ -872,4 +815,25 @@ func toolResultMsg(id, content string) llm.Message {
 	}
 
 	return llm.Message{Role: "tool", ToolCallID: id, Content: content}
+}
+
+// skipToolCall answers a tool call that never dispatches - dropped by a
+// mid-batch interrupt or batched after an earlier call already terminated
+// the run. ToolCallKind's semantics is "the model requested this call",
+// which holds here too, so it emits a paired tool_call event carrying the
+// not-dispatched marker before the tool_result event: every tool_result on
+// the stream then has a matching tool_call, with no implication the call
+// executed. extra merges additional fields into the tool_result event's
+// data; nil is fine. Returns the tool-role message for the caller to append.
+func skipToolCall(emit *events.Emitter, tc llm.ToolCall, resultContent string, extra map[string]any) llm.Message {
+	emit.Emit(events.ToolCallKind, map[string]any{"id": tc.ID, "name": tc.Function.Name, "dispatched": false})
+
+	data := map[string]any{"id": tc.ID, "skipped": true}
+	for k, v := range extra {
+		data[k] = v
+	}
+
+	emit.Emit(events.ToolResult, data)
+
+	return toolResultMsg(tc.ID, resultContent)
 }

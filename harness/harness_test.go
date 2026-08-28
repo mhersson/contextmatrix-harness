@@ -466,12 +466,93 @@ func unansweredToolCalls(msgs []llm.Message) []string {
 	return missing
 }
 
-func TestRunTerminatingToolBatchExecutesEveryCall(t *testing.T) {
+// assertEveryToolResultHasCall verifies the event stream's core pairing
+// invariant: every tool_result event's id has a matching tool_call event,
+// whether or not the call actually dispatched. An orphan tool_result breaks
+// any consumer that pairs tool calls to their results.
+func assertEveryToolResultHasCall(t *testing.T, evs []events.Event) {
+	t.Helper()
+
+	called := map[string]bool{}
+
+	for _, ev := range evs {
+		if ev.Kind == events.ToolCallKind {
+			if id, ok := ev.Data["id"].(string); ok {
+				called[id] = true
+			}
+		}
+	}
+
+	for _, ev := range evs {
+		if ev.Kind != events.ToolResult {
+			continue
+		}
+
+		id, _ := ev.Data["id"].(string)
+		assert.True(t, called[id], "tool_result for id %q has no paired tool_call event", id)
+	}
+}
+
+// TestSkipToolCall drives the shared helper both undispatched-call branches
+// use: it must emit a paired tool_call event carrying the not-dispatched
+// marker before the tool_result event, and return the tool-role message
+// unchanged from today's synthesized skip content.
+func TestSkipToolCall(t *testing.T) {
+	tc := toolCall("7", "after", `{"x":1}`)
+
+	t.Run("base shape", func(t *testing.T) {
+		var transcript bytes.Buffer
+
+		emit := events.NewEmitter(nil, &transcript)
+
+		msg := skipToolCall(emit, tc, "skipped: user interjected", nil)
+
+		assert.Equal(t, "tool", msg.Role)
+		assert.Equal(t, "7", msg.ToolCallID)
+		assert.Equal(t, "skipped: user interjected", msg.Content)
+
+		evs := parseEvents(t, transcript.String())
+		require.Len(t, evs, 2, "exactly one paired tool_call and one tool_result")
+
+		assert.Equal(t, events.ToolCallKind, evs[0].Kind, "the tool_call event precedes the tool_result")
+		assert.Equal(t, "7", evs[0].Data["id"])
+		assert.Equal(t, "after", evs[0].Data["name"])
+		assert.Equal(t, false, evs[0].Data["dispatched"], "marks the call as not dispatched")
+
+		assert.Equal(t, events.ToolResult, evs[1].Kind)
+		assert.Equal(t, "7", evs[1].Data["id"])
+		assert.Equal(t, true, evs[1].Data["skipped"])
+	})
+
+	t.Run("extra result fields merge in", func(t *testing.T) {
+		var transcript bytes.Buffer
+
+		emit := events.NewEmitter(nil, &transcript)
+
+		skipToolCall(emit, tc, "unexecuted", map[string]any{"already_terminated": true})
+
+		evs := parseEvents(t, transcript.String())
+		require.Len(t, evs, 2)
+		assert.Equal(t, true, evs[1].Data["already_terminated"])
+		assert.Equal(t, true, evs[1].Data["skipped"], "the base skip marker still applies")
+	})
+}
+
+// TestRunTerminatingToolBatchAnswersPostTerminalCalls pins that calls batched
+// after a successful terminating call are answered but never executed: the run
+// has logically ended, and the terminating call's outward report was computed
+// before any such side effect could land. Every call still owes a result - the
+// assistant message references its ID, and an unanswered ID makes the history
+// this run carries out malformed.
+func TestRunTerminatingToolBatchAnswersPostTerminalCalls(t *testing.T) {
 	tests := []struct {
-		name       string
-		calls      []llm.ToolCall
-		wantBefore int
-		wantAfter  int
+		name string
+		// calls is one batch; every call after the terminating one must be
+		// answered with the synthetic result instead of dispatched.
+		calls          []llm.ToolCall
+		wantBefore     int
+		wantAfter      int
+		wantUnexecuted []string
 	}{
 		{
 			name: "terminating call first",
@@ -480,8 +561,9 @@ func TestRunTerminatingToolBatchExecutesEveryCall(t *testing.T) {
 				toolCall("2", "before", `{}`),
 				toolCall("3", "after", `{}`),
 			},
-			wantBefore: 1,
-			wantAfter:  1,
+			wantBefore:     0,
+			wantAfter:      0,
+			wantUnexecuted: []string{"2", "3"},
 		},
 		{
 			name: "terminating call in the middle",
@@ -490,8 +572,9 @@ func TestRunTerminatingToolBatchExecutesEveryCall(t *testing.T) {
 				toolCall("2", "finish", `{"commit_message":"x"}`),
 				toolCall("3", "after", `{}`),
 			},
-			wantBefore: 1,
-			wantAfter:  1,
+			wantBefore:     1,
+			wantAfter:      0,
+			wantUnexecuted: []string{"3"},
 		},
 		{
 			name: "terminating call last",
@@ -510,8 +593,9 @@ func TestRunTerminatingToolBatchExecutesEveryCall(t *testing.T) {
 				toolCall("2", "finish", `{"commit_message":"x"}`),
 				toolCall("3", "nosuch", `{}`),
 			},
-			wantBefore: 1,
-			wantAfter:  0,
+			wantBefore:     1,
+			wantAfter:      0,
+			wantUnexecuted: []string{"3"},
 		},
 	}
 
@@ -535,8 +619,68 @@ func TestRunTerminatingToolBatchExecutesEveryCall(t *testing.T) {
 			assert.Equal(t, tt.wantAfter, after.calls)
 			assert.JSONEq(t, `{"commit_message":"x"}`, string(res.CompletionArgs), "surfaces the terminating call's args")
 			assert.Empty(t, unansweredToolCalls(res.Messages), "every tool call in the batch receives a result message")
+			assert.Zero(t, res.ToolCallFailures, "a call left unexecuted is not a failed call")
+
+			for _, id := range tt.wantUnexecuted {
+				out, ok := findToolResult(res.Messages, id)
+				require.True(t, ok, "call %s must be answered", id)
+				assert.Contains(t, out, "unexecuted", "call %s must carry the synthetic post-terminal result", id)
+			}
 		})
 	}
+}
+
+// TestRunPostTerminalCallEventTrail pins the observability of a call answered
+// without dispatching: it emits a paired tool_call event first, carrying the
+// not-dispatched marker (nothing was executed), then its tool_result - the
+// same shape the interrupt skip path uses via the shared helper.
+func TestRunPostTerminalCallEventTrail(t *testing.T) {
+	fin := &finishTool{}
+	after := &countingTool{name: "after"}
+	reg := tools.NewRegistry(fin, after)
+
+	f := &fakeLLM{responses: []llm.Response{
+		{ToolCalls: []llm.ToolCall{
+			toolCall("1", "finish", `{"commit_message":"x"}`),
+			toolCall("2", "after", `{}`),
+		}},
+	}}
+
+	var transcript bytes.Buffer
+
+	emit := events.NewEmitter(nil, &transcript)
+
+	res, err := Run(context.Background(), f, reg, emit, "task", Config{MaxTurns: 5})
+	require.NoError(t, err)
+	require.True(t, res.Completed)
+	require.Zero(t, after.calls, "the post-terminal call must not execute")
+
+	assert.Equal(t, 1, res.ToolCallCount, "only the dispatched call counts")
+
+	evs := parseEvents(t, transcript.String())
+	assertEveryToolResultHasCall(t, evs)
+
+	var call, result *events.Event
+
+	for i, ev := range evs {
+		if ev.Data["id"] != "2" {
+			continue
+		}
+
+		switch ev.Kind {
+		case events.ToolCallKind:
+			call = &evs[i]
+		case events.ToolResult:
+			result = &evs[i]
+		}
+	}
+
+	require.NotNil(t, call, "the unexecuted call must still emit a paired tool_call event")
+	assert.Equal(t, "after", call.Data["name"], "the paired call names the tool the model batched after the run ended")
+	assert.Equal(t, false, call.Data["dispatched"], "marks the call as not dispatched")
+
+	require.NotNil(t, result, "the unexecuted call must still emit a tool_result event")
+	assert.Equal(t, true, result.Data["already_terminated"])
 }
 
 func TestRunTerminatingToolExecuteErrorDoesNotTerminate(t *testing.T) {
@@ -1166,6 +1310,61 @@ func TestInboxMidBatchInterrupt(t *testing.T) {
 	uIdx := userMessageIndexAfter(second, lastToolIdx)
 	require.GreaterOrEqual(t, uIdx, 0, "user message must follow the tool results")
 	assert.Equal(t, "stop and listen", second[uIdx].Content)
+}
+
+// TestInboxMidBatchInterruptEventTrail pins the same shape
+// TestRunPostTerminalCallEventTrail pins for the other skip path: a call
+// dropped by a mid-batch interrupt emits a paired tool_call event (marked
+// not dispatched) before its tool_result, via the shared skipToolCall helper.
+func TestInboxMidBatchInterruptEventTrail(t *testing.T) {
+	inbox := &scriptedInbox{closeErr: ErrInboxClosed}
+	it := &interjectingTool{inbox: inbox, msg: UserMessage{Content: "stop and listen", MessageID: "m1"}}
+	reg := tools.NewRegistry(it)
+
+	capt := &capturingLLMSeq{responses: []llm.Response{
+		{ToolCalls: []llm.ToolCall{
+			toolCall("1", "interject", `{}`),
+			toolCall("2", "interject", `{}`),
+			toolCall("3", "interject", `{}`),
+		}},
+		{Content: "done", FinishReason: "stop"},
+	}}
+
+	var transcript bytes.Buffer
+
+	emit := events.NewEmitter(nil, &transcript)
+
+	res, err := Run(context.Background(), capt, reg, emit, "task", Config{MaxTurns: 10, Inbox: inbox})
+	require.NoError(t, err)
+	assert.True(t, res.Completed)
+
+	evs := parseEvents(t, transcript.String())
+	assertEveryToolResultHasCall(t, evs)
+
+	for _, id := range []string{"2", "3"} {
+		var call, result *events.Event
+
+		for i, ev := range evs {
+			if ev.Data["id"] != id {
+				continue
+			}
+
+			switch ev.Kind {
+			case events.ToolCallKind:
+				call = &evs[i]
+			case events.ToolResult:
+				result = &evs[i]
+			}
+		}
+
+		require.NotNil(t, call, "skipped call %s must emit a paired tool_call event", id)
+		assert.Equal(t, "interject", call.Data["name"])
+		assert.Equal(t, false, call.Data["dispatched"], "marks call %s as not dispatched", id)
+
+		require.NotNil(t, result, "skipped call %s must emit a tool_result event", id)
+		assert.Equal(t, true, result.Data["skipped"])
+		assert.NotContains(t, result.Data, "already_terminated", "an interrupt skip is not a post-terminal skip")
+	}
 }
 
 func TestRunDetectsIncapability(t *testing.T) {
@@ -1935,6 +2134,10 @@ func TestRunUsageEventCarriesCacheBuckets_CachedTokens(t *testing.T) {
 	assert.InDelta(t, 10.0, usageEv.Data["completion_tokens"], 0, "completion_tokens must be preserved")
 	assert.InDelta(t, 0.5, usageEv.Data["cost_usd"], 0, "cost_usd must be preserved")
 	assert.Equal(t, "test-model", usageEv.Data["model"], "model must be present and match")
+
+	// OpenAI-shape wire: the subset was subtracted out of prompt_tokens, so the
+	// raw wire value is larger than the disjoint bucket.
+	assert.InDelta(t, 100.0, usageEv.Data["wire_prompt_tokens"], 0, "wire_prompt_tokens must carry the pre-normalization value")
 }
 
 func TestRunUsageEventCarriesCacheBuckets_Disjoint(t *testing.T) {
@@ -1971,6 +2174,45 @@ func TestRunUsageEventCarriesCacheBuckets_Disjoint(t *testing.T) {
 	assert.InDelta(t, 10.0, usageEv.Data["completion_tokens"], 0, "completion_tokens must be preserved")
 	assert.InDelta(t, 0.5, usageEv.Data["cost_usd"], 0, "cost_usd must be preserved")
 	assert.Equal(t, "test-model", usageEv.Data["model"], "model must be present and match")
+
+	// Anthropic-shape wire: prompt was already disjoint, so the raw wire value
+	// equals the disjoint bucket.
+	assert.InDelta(t, 100.0, usageEv.Data["wire_prompt_tokens"], 0, "wire_prompt_tokens must equal prompt_tokens on an already-disjoint wire")
+}
+
+func TestRunUsageEventCarriesWirePromptTokens_BothShapes(t *testing.T) {
+	// LiteLLM-family gateway emitting both cache wire shapes at once: the
+	// shim value wins for cacheRead and the subset subtraction is skipped
+	// (the earlier fix on this branch), so prompt_tokens is already disjoint
+	// and wire_prompt_tokens must equal it, not sit above it.
+	f := &fakeLLM{responses: []llm.Response{
+		{
+			Content:      "done",
+			FinishReason: "stop",
+			Usage: llm.Usage{
+				PromptTokens: 100, CompletionTokens: 10, Cost: 0.5,
+				PromptTokensDetails:      &llm.PromptTokensDetails{CachedTokens: 80},
+				CacheReadInputTokens:     500,
+				CacheCreationInputTokens: 40,
+			},
+		},
+	}}
+
+	var transcript bytes.Buffer
+
+	emit := events.NewEmitter(nil, &transcript)
+
+	_, err := Run(context.Background(), f, tools.NewRegistry(), emit, "task", Config{MaxTurns: 10, Model: "test-model"})
+	require.NoError(t, err)
+
+	evs := parseEvents(t, transcript.String())
+	usageEv := findUsageEvent(evs)
+	require.NotNil(t, usageEv, "must have a usage event")
+
+	assert.InDelta(t, 500.0, usageEv.Data["cache_read_tokens"], 0, "cache_read_tokens must match")
+	assert.InDelta(t, 40.0, usageEv.Data["cache_creation_tokens"], 0, "cache_creation_tokens must match")
+	assert.InDelta(t, 100.0, usageEv.Data["prompt_tokens"], 0, "prompt_tokens must not be double-decremented")
+	assert.InDelta(t, 100.0, usageEv.Data["wire_prompt_tokens"], 0, "wire_prompt_tokens must equal prompt_tokens when both shapes are present")
 }
 
 // TestRunCompactionUsageEventCarriesCacheBuckets covers the third emit site.
@@ -2031,13 +2273,17 @@ func TestRunCompactionUsageEventCarriesCacheBuckets(t *testing.T) {
 	assert.InDelta(t, 200.0, compactionEv.Data["prompt_tokens"], 0, "prompt_tokens must exclude the cached portion")
 	assert.InDelta(t, 20.0, compactionEv.Data["completion_tokens"], 0, "completion_tokens must be preserved")
 	assert.InDelta(t, 0.10, compactionEv.Data["cost_usd"], 0, "cost_usd must be preserved")
+
+	// OpenAI-shape wire: the subset was subtracted out, so the raw wire value
+	// is larger than the disjoint bucket - the compaction event must be
+	// self-describing too, since it is its own billable call.
+	assert.InDelta(t, 500.0, compactionEv.Data["wire_prompt_tokens"], 0, "wire_prompt_tokens must carry the pre-normalization value")
 }
 
 // TestRunDuplicateTerminalCallExecutesOnce pins that a second terminal call in
 // one batch does not execute the terminal tool again. tools.Terminal carries no
 // idempotency contract, and a terminal tool typically reports completion
-// outward, so running it twice reports twice. Calls that are not terminal still
-// execute - dropping them silently is the defect this batch behaviour replaced.
+// outward, so running it twice reports twice.
 func TestRunDuplicateTerminalCallExecutesOnce(t *testing.T) {
 	fin := &finishTool{}
 	after := &countingTool{name: "after"}
@@ -2056,6 +2302,12 @@ func TestRunDuplicateTerminalCallExecutesOnce(t *testing.T) {
 
 	assert.Equal(t, 1, fin.calls, "the terminating tool executes once per batch")
 	assert.JSONEq(t, `{"commit_message":"first"}`, string(res.CompletionArgs), "the first terminal call wins")
-	assert.Equal(t, 1, after.calls, "non-terminal calls still execute, as CTXHNS-015 requires")
+	assert.Zero(t, after.calls, "a call batched after the terminating one does not execute")
 	assert.Empty(t, unansweredToolCalls(res.Messages), "every call is still answered")
+
+	for _, id := range []string{"2", "3"} {
+		out, ok := findToolResult(res.Messages, id)
+		require.True(t, ok, "call %s must be answered", id)
+		assert.Contains(t, out, "unexecuted", "call %s must carry the synthetic post-terminal result", id)
+	}
 }

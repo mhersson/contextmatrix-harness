@@ -48,8 +48,6 @@ func (w *burnLLM) SendStream(_ context.Context, req llm.Request, _ func(llm.Delt
 		return r, nil
 	}
 
-	// A distinct path per turn: the repeat guard would otherwise skip the second
-	// and later reads, which is correct behaviour but not what these tests measure.
 	return llm.Response{ToolCalls: []llm.ToolCall{
 		toolCall(fmt.Sprintf("c%d", len(w.requests)), "read",
 			fmt.Sprintf(`{"path":"missing%d"}`, len(w.requests))),
@@ -332,28 +330,4 @@ func TestBatchNudgeYieldsToWrapUp(t *testing.T) {
 	assert.Equal(t, 0, countUserMsg(w.requests[3], "BATCH UP"), "no two contradictory messages on one turn")
 	assert.Equal(t, 0, countUserMsg(w.requests[4], "BATCH UP"),
 		"and a run already told to finish is never later told to batch its reads")
-}
-
-// TestBatchNudgeIgnoresSkippedCalls pins that a call answered from the repeat
-// record does not count toward the nudge. It spent no round trip on a lookup,
-// and a model repeating one call is looping - telling it to batch misdiagnoses
-// it and spends the one-shot nudge on the wrong problem.
-func TestBatchNudgeIgnoresSkippedCalls(t *testing.T) {
-	look := &countingReadOnlyTool{name: "look"}
-
-	var resp []llm.Response
-	for i := 1; i <= 5; i++ {
-		resp = append(resp, llm.Response{ToolCalls: []llm.ToolCall{toolCall(fmt.Sprintf("%d", i), "look", `{"path":"a.go"}`)}})
-	}
-
-	w := &burnLLM{responses: resp}
-
-	_, err := Run(context.Background(), w, tools.NewRegistry(look), newEmitter(), "task", Config{
-		MaxTurns: 5, BatchNudgeTurns: 3, BatchNudgeMessage: "BATCH UP",
-	})
-	require.NoError(t, err)
-	require.Len(t, w.requests, 5)
-
-	assert.Equal(t, 0, countUserMsg(w.requests[4], "BATCH UP"),
-		"a model repeating one call is looping, not failing to batch")
 }
