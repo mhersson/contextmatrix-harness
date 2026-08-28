@@ -107,7 +107,7 @@ func (t SkillTool) Schema() llm.Tool {
 }
 
 func (t SkillTool) Execute(ctx context.Context, args map[string]any) (Result, error) {
-	name, err := requireString(args, t.Name(), "skill", "the name of the skill to load (one of the available skills listed above)")
+	name, err := requireString(args, t.Name(), "skill", "the name of the skill to load")
 	if err != nil {
 		return Result{}, err
 	}

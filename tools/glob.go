@@ -131,14 +131,17 @@ func (t GlobTool) globViaFd(ctx context.Context, bin, pattern, searchPath string
 // `rg --glob`, which overrides ignore rules) and applies the glob via the
 // same streaming filter as globViaFd (see streamEnumeration). rg exits 1 when
 // it finds no files, which ignoreExit below treats as "no matches" rather
-// than an error; exit >= 2 is a real error.
+// than an error; exit >= 2 is a real error. "--" before searchPath mirrors
+// globViaFd's own "--" (defense in depth: searchPath is always jail-resolved
+// to an absolute path by resolveInRoots, so it can never actually start with
+// "-", but nothing should depend on that holding for every future caller).
 func (t GlobTool) globViaRg(ctx context.Context, pattern, searchPath string) ([]string, error) {
 	patternSegs, err := prepareGlob(pattern)
 	if err != nil {
 		return nil, err
 	}
 
-	cmd := exec.CommandContext(ctx, "rg", "--files", searchPath)
+	cmd := exec.CommandContext(ctx, "rg", "--files", "--", searchPath)
 	cmd.Dir = t.root
 	cmd.Env = ScrubbedEnv(nil)
 

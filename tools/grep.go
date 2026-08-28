@@ -81,17 +81,38 @@ func (t GrepTool) Execute(ctx context.Context, args map[string]any) (Result, err
 		return Result{}, fmt.Errorf("rg failed: %v: %s", err, out)
 	}
 	// Strip the workspace root prefix for cleaner, portable output.
-	return Result{Text: capLines(strings.ReplaceAll(out, t.root+"/", ""), grepMaxLines)}, nil
+	return Result{Text: capLines(stripWorkspacePrefix(out, t.root), grepMaxLines)}, nil
+}
+
+// stripWorkspacePrefix removes a leading root+"/" from each line's own path
+// field only, never from elsewhere in the line. A whole-output ReplaceAll
+// would also rewrite the workspace prefix wherever it happens to appear as an
+// INFIX of a secondary-root path (e.g. a mirror tree that reproduces the
+// workspace path underneath it), corrupting that line's path into something
+// the read tool then rejects. Anchoring to the line start limits the strip to
+// genuine path prefixes.
+func stripWorkspacePrefix(out, root string) string {
+	prefix := root + "/"
+	if prefix == "/" {
+		return out
+	}
+
+	lines := strings.Split(out, "\n")
+	for i, line := range lines {
+		lines[i] = strings.TrimPrefix(line, prefix)
+	}
+
+	return strings.Join(lines, "\n")
 }
 
 // grepEmptyMsg returns "no matches" with an optional corrective note when the
-// pattern contains GNU BRE escapes that ripgrep interprets differently.
+// pattern uses GNU BRE alternation syntax that ripgrep interprets differently.
+// \( \) \{ \+ are all valid Rust-regex literal escapes (matching a literal
+// paren/brace/plus), so they are not flagged here - only \|, the observed
+// failure class, actually behaves differently under ripgrep's Rust-regex
+// syntax (alternation is unescaped a|b; \| matches a literal pipe).
 func grepEmptyMsg(pattern string) string {
-	if strings.Contains(pattern, "\\|") ||
-		strings.Contains(pattern, "\\(") ||
-		strings.Contains(pattern, "\\)") ||
-		strings.Contains(pattern, "\\{") ||
-		strings.Contains(pattern, "\\+") {
+	if strings.Contains(pattern, "\\|") {
 		return "no matches - note: grep uses ripgrep (Rust regex) syntax where a|b is alternation and \\| matches a literal pipe"
 	}
 
