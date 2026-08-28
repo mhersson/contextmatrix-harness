@@ -43,6 +43,8 @@ func NewReadTool(root string) ReadTool { return ReadTool{root: root} }
 func (t ReadTool) Name() string { return "read" }
 
 func (t ReadTool) Schema() llm.Tool {
+	pathDesc := "file path relative to the workspace root" + extraRootsParamClause(t.extraRoots.Effective)
+
 	return llm.Tool{Type: "function", Function: llm.ToolFunction{
 		Name: "read",
 		Description: "Read a UTF-8 text file. Large files are paginated: " +
@@ -50,15 +52,15 @@ func (t ReadTool) Schema() llm.Tool {
 			"Use offset (1-based) and limit to page through larger files. " +
 			"Binary files are detected and reported without loading content into context." +
 			extraRootsSchemaClause(t.extraRoots.Effective),
-		Parameters: json.RawMessage(`{
+		Parameters: json.RawMessage(fmt.Sprintf(`{
 			"type":"object",
 			"properties":{
-				"path":{"type":"string","description":"file path relative to the workspace root"},
+				"path":{"type":"string","description":%s},
 				"offset":{"type":"integer","description":"optional 1-based first line to return; use the hint in the previous response to continue"},
 				"limit":{"type":"integer","description":"optional maximum number of lines"}
 			},
 			"required":["path"]
-		}`),
+		}`, jsonString(pathDesc))),
 	}}
 }
 

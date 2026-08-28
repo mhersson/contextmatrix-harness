@@ -20,20 +20,22 @@ func NewGrepTool(root string) GrepTool { return GrepTool{root: root} }
 func (t GrepTool) Name() string { return "grep" }
 
 func (t GrepTool) Schema() llm.Tool {
+	pathDesc := "optional subpath under the workspace root to search" + extraRootsParamClause(t.extraRoots.Effective)
+
 	return llm.Tool{Type: "function", Function: llm.ToolFunction{
 		Name: "grep",
 		Description: "Search file contents with ripgrep (regex). Optionally restrict to a path subtree and a glob. " +
 			"Output is capped at 200 matching lines - prefer specific patterns over broad ones." +
 			extraRootsSchemaClause(t.extraRoots.Effective),
-		Parameters: json.RawMessage(`{
+		Parameters: json.RawMessage(fmt.Sprintf(`{
 			"type":"object",
 			"properties":{
 				"pattern":{"type":"string","description":"regular expression to search for"},
-				"path":{"type":"string","description":"optional subpath under the workspace root to search"},
+				"path":{"type":"string","description":%s},
 				"glob":{"type":"string","description":"optional file glob filter, e.g. *.md"}
 			},
 			"required":["pattern"]
-		}`),
+		}`, jsonString(pathDesc))),
 	}}
 }
 

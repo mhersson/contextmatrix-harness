@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -303,6 +304,71 @@ func TestSchemaDescriptionMentionsRootsWhenConfigured(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.NotContains(t, tc.plainDesc, f.dep, "an unconfigured tool's schema says nothing about extra roots")
 			assert.Contains(t, tc.configured, f.dep, "a configured tool's schema names the permitted root")
+		})
+	}
+}
+
+// pathParamDescription extracts the "path" property's own JSON schema
+// description out of a tool's Parameters - it also proves the dynamically
+// spliced JSON is still valid JSON, since json.Unmarshal fails loudly on a
+// malformed template.
+func pathParamDescription(t *testing.T, parameters json.RawMessage) string {
+	t.Helper()
+
+	var schema struct {
+		Properties map[string]struct {
+			Description string `json:"description"`
+		} `json:"properties"`
+	}
+
+	require.NoError(t, json.Unmarshal(parameters, &schema))
+
+	return schema.Properties["path"].Description
+}
+
+// TestSchemaPathParamConsistentWithRootsClause is the ride-along fix: the
+// per-parameter "path" description must not keep reading as workspace-only
+// when the tool-level Description clause says an absolute path into a
+// configured extra root is also accepted - and must stay exactly as before
+// when no extra roots are configured, mirroring extraRootsSchemaClause's own
+// "only when configured" gating.
+func TestSchemaPathParamConsistentWithRootsClause(t *testing.T) {
+	f := newReadRootFixture(t)
+
+	cases := []struct {
+		name         string
+		baseline     string
+		unconfigured json.RawMessage
+		configured   json.RawMessage
+	}{
+		{
+			name:         "read",
+			baseline:     "file path relative to the workspace root",
+			unconfigured: NewReadTool(f.workspace).Schema().Function.Parameters,
+			configured:   NewReadTool(f.workspace).WithReadRoots([]string{f.dep}).Schema().Function.Parameters,
+		},
+		{
+			name:         "grep",
+			baseline:     "optional subpath under the workspace root to search",
+			unconfigured: NewGrepTool(f.workspace).Schema().Function.Parameters,
+			configured:   NewGrepTool(f.workspace).WithReadRoots([]string{f.dep}).Schema().Function.Parameters,
+		},
+		{
+			name:         "glob",
+			baseline:     "optional subpath under the workspace root to search",
+			unconfigured: NewGlobTool(f.workspace).Schema().Function.Parameters,
+			configured:   NewGlobTool(f.workspace).WithReadRoots([]string{f.dep}).Schema().Function.Parameters,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			unconfigured := pathParamDescription(t, tc.unconfigured)
+			configured := pathParamDescription(t, tc.configured)
+
+			assert.Equal(t, tc.baseline, unconfigured, "no extra roots: the param text is byte-identical to before")
+			assert.Contains(t, configured, "absolute", "extra roots configured: the param text stops implying workspace-only")
+			assert.NotEqual(t, unconfigured, configured)
 		})
 	}
 }

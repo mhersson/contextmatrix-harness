@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -173,6 +174,32 @@ func extraRootsSchemaClause(effective []string) string {
 
 	return " An absolute path under any of these additional read-only roots is also permitted: " +
 		strings.Join(effective, ", ") + "."
+}
+
+// extraRootsParamClause returns a short clause for a path-like parameter's own
+// description, or "" when no extra read-only roots are configured. The roots
+// themselves are already named in the tool-level Description
+// (extraRootsSchemaClause) - this only keeps the parameter text from
+// contradicting it by still reading as workspace-only.
+func extraRootsParamClause(effective []string) string {
+	if len(effective) == 0 {
+		return ""
+	}
+
+	return ", or an absolute path under one of this tool's configured additional read-only roots (see the tool description)"
+}
+
+// jsonString returns s as a JSON string literal (quoted and escaped), for
+// splicing a dynamic value into a hand-written JSON schema template without
+// hand-rolling escaping.
+func jsonString(s string) string {
+	b, err := json.Marshal(s)
+	if err != nil {
+		// s is always a plain Go string - json.Marshal of a string cannot fail.
+		return `""`
+	}
+
+	return string(b)
 }
 
 // evalOrSelf returns EvalSymlinks(p), or p unchanged if it cannot be resolved.
