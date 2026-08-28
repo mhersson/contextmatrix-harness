@@ -60,19 +60,52 @@ func resolveInRoots(roots []string, p string) (string, error) {
 		return "", fmt.Errorf("path %q escapes workspace root", p)
 	}
 
-	return "", fmt.Errorf("path %q is outside the workspace and every permitted read-only root", p)
+	return "", fmt.Errorf("path %q is outside the workspace and every permitted read-only root: %s",
+		p, strings.Join(roots[1:], ", "))
+}
+
+// DropReason identifies why sanitizeReadRoots refused a caller-supplied extra
+// read root - see ReadRoots.
+type DropReason string
+
+const (
+	// DropReasonRelative covers both a relative path and a blank entry: an
+	// empty or whitespace-only string is not absolute either, so it falls out
+	// of the same check.
+	DropReasonRelative        DropReason = "relative"
+	DropReasonNonexistent     DropReason = "nonexistent"
+	DropReasonFilesystemRoot  DropReason = "/"
+	DropReasonWorkspaceParent DropReason = "workspace-parent"
+)
+
+// DroppedReadRoot is one caller-supplied extra read root that sanitizeReadRoots
+// refused, paired with why. Root is the entry as given by the caller, not the
+// resolved form, so it matches whatever the caller configured.
+type DroppedReadRoot struct {
+	Root   string
+	Reason DropReason
+}
+
+// ReadRoots is sanitizeReadRoots' full outcome: the roots that survived
+// (symlink-resolved, in the order given - this is what resolveInRoots checks)
+// and, for observability, the ones dropped and why. Dropping is silent and
+// one-directional - a misconfigured root narrows access, it never widens it -
+// so a caller cannot accidentally open the filesystem; ReadRoots exists so the
+// caller can still find out what happened. The harness never logs a drop
+// itself - a caller that wants an audit trail reads this after construction
+// (see e.g. ReadTool.ReadRoots).
+type ReadRoots struct {
+	Effective []string
+	Dropped   []DroppedReadRoot
 }
 
 // sanitizeReadRoots drops extra read roots that would widen access rather than
-// add a sibling tree: an empty path, a relative path, one that cannot be
-// resolved, the filesystem root, and any root that contains the workspace
-// (which would permit the workspace's whole parentage). What survives is stored
-// symlink-resolved, so what was judged here is what resolveInRoots checks.
-// Dropping is silent and one-directional - a misconfigured root narrows access,
-// it never widens it - so a caller cannot accidentally open the filesystem.
-func sanitizeReadRoots(workspace string, roots []string) []string {
+// add a sibling tree: a relative or blank path, one that cannot be resolved,
+// the filesystem root, and any root that contains the workspace (which would
+// permit the workspace's whole parentage).
+func sanitizeReadRoots(workspace string, roots []string) ReadRoots {
 	if len(roots) == 0 {
-		return nil
+		return ReadRoots{}
 	}
 
 	sep := string(os.PathSeparator)
@@ -83,18 +116,18 @@ func sanitizeReadRoots(workspace string, roots []string) []string {
 	// very widening this function exists to refuse.
 	wsResolved := evalOrSelf(filepath.Clean(workspace))
 
-	var out []string
+	var result ReadRoots
 
 	for _, r := range roots {
-		if strings.TrimSpace(r) == "" {
-			continue
-		}
-
 		rc := filepath.Clean(r)
 
-		// A relative root would resolve against the process working directory,
-		// which is never what a caller configuring a dependency tree meant.
+		// A relative root (blank entries included: filepath.Clean("") is "."
+		// and neither is absolute) would resolve against the process working
+		// directory, which is never what a caller configuring a dependency tree
+		// meant.
 		if !filepath.IsAbs(rc) {
+			result.Dropped = append(result.Dropped, DroppedReadRoot{Root: r, Reason: DropReasonRelative})
+
 			continue
 		}
 
@@ -104,19 +137,42 @@ func sanitizeReadRoots(workspace string, roots []string) []string {
 		// re-resolves per call, so keeping an unresolvable root would defer this
 		// gate to a moment that never runs it.
 		resolved, rerr := filepath.EvalSymlinks(rc)
-		if rerr != nil || resolved == sep {
+		if rerr != nil {
+			result.Dropped = append(result.Dropped, DroppedReadRoot{Root: r, Reason: DropReasonNonexistent})
+
+			continue
+		}
+
+		if resolved == sep {
+			result.Dropped = append(result.Dropped, DroppedReadRoot{Root: r, Reason: DropReasonFilesystemRoot})
+
 			continue
 		}
 
 		// resolved contains (or is) the workspace: permitting it would widen.
 		if wsResolved == resolved || strings.HasPrefix(wsResolved, resolved+sep) {
+			result.Dropped = append(result.Dropped, DroppedReadRoot{Root: r, Reason: DropReasonWorkspaceParent})
+
 			continue
 		}
 
-		out = append(out, resolved)
+		result.Effective = append(result.Effective, resolved)
 	}
 
-	return out
+	return result
+}
+
+// extraRootsSchemaClause returns a sentence naming a tool's configured extra
+// read-only roots, or "" when none survived sanitizeReadRoots. Appended to a
+// read-only tool's schema description so a model can discover the capability
+// instead of only benefiting from it by guessing absolute paths.
+func extraRootsSchemaClause(effective []string) string {
+	if len(effective) == 0 {
+		return ""
+	}
+
+	return " An absolute path under any of these additional read-only roots is also permitted: " +
+		strings.Join(effective, ", ") + "."
 }
 
 // evalOrSelf returns EvalSymlinks(p), or p unchanged if it cannot be resolved.

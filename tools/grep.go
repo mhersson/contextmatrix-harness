@@ -11,8 +11,8 @@ import (
 )
 
 type GrepTool struct {
-	root      string
-	readRoots []string
+	root       string
+	extraRoots ReadRoots
 }
 
 func NewGrepTool(root string) GrepTool { return GrepTool{root: root} }
@@ -21,8 +21,10 @@ func (t GrepTool) Name() string { return "grep" }
 
 func (t GrepTool) Schema() llm.Tool {
 	return llm.Tool{Type: "function", Function: llm.ToolFunction{
-		Name:        "grep",
-		Description: "Search file contents with ripgrep (regex). Optionally restrict to a path subtree and a glob. Output is capped at 200 matching lines - prefer specific patterns over broad ones.",
+		Name: "grep",
+		Description: "Search file contents with ripgrep (regex). Optionally restrict to a path subtree and a glob. " +
+			"Output is capped at 200 matching lines - prefer specific patterns over broad ones." +
+			extraRootsSchemaClause(t.extraRoots.Effective),
 		Parameters: json.RawMessage(`{
 			"type":"object",
 			"properties":{
@@ -143,13 +145,20 @@ func (t GrepTool) ReadOnly() bool { return true }
 // as before. Only the search path resolves against them: with no path argument
 // the tool still works from the workspace root.
 func (t GrepTool) WithReadRoots(roots []string) GrepTool {
-	t.readRoots = sanitizeReadRoots(t.root, roots)
+	t.extraRoots = sanitizeReadRoots(t.root, roots)
 
 	return t
+}
+
+// ReadRoots reports the extra read-only roots this tool was configured with:
+// which survived sanitizeReadRoots and which were dropped, and why. See
+// ReadRoots (jail.go).
+func (t GrepTool) ReadRoots() ReadRoots {
+	return t.extraRoots
 }
 
 // roots is the ordered permitted set: the workspace first, then any extra
 // read-only roots.
 func (t GrepTool) roots() []string {
-	return append([]string{t.root}, t.readRoots...)
+	return append([]string{t.root}, t.extraRoots.Effective...)
 }

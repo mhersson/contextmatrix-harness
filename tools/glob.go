@@ -40,8 +40,8 @@ const globScanBufSize = 1 << 20
 const globCtxCheckEvery = 4096
 
 type GlobTool struct {
-	root      string
-	readRoots []string
+	root       string
+	extraRoots ReadRoots
 }
 
 func NewGlobTool(root string) GlobTool { return GlobTool{root: root} }
@@ -50,8 +50,9 @@ func (t GlobTool) Name() string { return "glob" }
 
 func (t GlobTool) Schema() llm.Tool {
 	return llm.Tool{Type: "function", Function: llm.ToolFunction{
-		Name:        "glob",
-		Description: "List files matching a glob pattern, honoring .gitignore. Pattern matches the file's path relative to the search root, with a leading **/ implied: docs/*.md matches a docs/ directory at any depth; ** matches zero or more path segments, so */*.md matches any depth of one or more directories, not just one level; an empty pattern matches every file. Uses Go's filepath.Match glob syntax (*, ?, [...]), not shell glob -- e.g. *.{md,txt} brace expansion is literal and matches nothing. Optionally restrict to a subpath.",
+		Name: "glob",
+		Description: "List files matching a glob pattern, honoring .gitignore. Pattern matches the file's path relative to the search root, with a leading **/ implied: docs/*.md matches a docs/ directory at any depth; ** matches zero or more path segments, so */*.md matches any depth of one or more directories, not just one level; an empty pattern matches every file. Uses Go's filepath.Match glob syntax (*, ?, [...]), not shell glob -- e.g. *.{md,txt} brace expansion is literal and matches nothing. Optionally restrict to a subpath." +
+			extraRootsSchemaClause(t.extraRoots.Effective),
 		Parameters: json.RawMessage(`{
 			"type":"object",
 			"properties":{
@@ -409,13 +410,20 @@ func (t GlobTool) ReadOnly() bool { return true }
 // as before. Only the search path resolves against them: with no path argument
 // the tool still works from the workspace root.
 func (t GlobTool) WithReadRoots(roots []string) GlobTool {
-	t.readRoots = sanitizeReadRoots(t.root, roots)
+	t.extraRoots = sanitizeReadRoots(t.root, roots)
 
 	return t
+}
+
+// ReadRoots reports the extra read-only roots this tool was configured with:
+// which survived sanitizeReadRoots and which were dropped, and why. See
+// ReadRoots (jail.go).
+func (t GlobTool) ReadRoots() ReadRoots {
+	return t.extraRoots
 }
 
 // roots is the ordered permitted set: the workspace first, then any extra
 // read-only roots.
 func (t GlobTool) roots() []string {
-	return append([]string{t.root}, t.readRoots...)
+	return append([]string{t.root}, t.extraRoots.Effective...)
 }

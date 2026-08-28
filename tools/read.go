@@ -34,8 +34,8 @@ func looksBinary(p []byte) bool {
 }
 
 type ReadTool struct {
-	root      string
-	readRoots []string
+	root       string
+	extraRoots ReadRoots
 }
 
 func NewReadTool(root string) ReadTool { return ReadTool{root: root} }
@@ -48,7 +48,8 @@ func (t ReadTool) Schema() llm.Tool {
 		Description: "Read a UTF-8 text file. Large files are paginated: " +
 			"by default up to 2000 lines or 120 KB are returned. " +
 			"Use offset (1-based) and limit to page through larger files. " +
-			"Binary files are detected and reported without loading content into context.",
+			"Binary files are detected and reported without loading content into context." +
+			extraRootsSchemaClause(t.extraRoots.Effective),
 		Parameters: json.RawMessage(`{
 			"type":"object",
 			"properties":{
@@ -233,13 +234,20 @@ func (t ReadTool) ReadOnly() bool { return true }
 // as before. Only the search path resolves against them: with no path argument
 // the tool still works from the workspace root.
 func (t ReadTool) WithReadRoots(roots []string) ReadTool {
-	t.readRoots = sanitizeReadRoots(t.root, roots)
+	t.extraRoots = sanitizeReadRoots(t.root, roots)
 
 	return t
+}
+
+// ReadRoots reports the extra read-only roots this tool was configured with:
+// which survived sanitizeReadRoots and which were dropped, and why. See
+// ReadRoots (jail.go).
+func (t ReadTool) ReadRoots() ReadRoots {
+	return t.extraRoots
 }
 
 // roots is the ordered permitted set: the workspace first, then any extra
 // read-only roots.
 func (t ReadTool) roots() []string {
-	return append([]string{t.root}, t.readRoots...)
+	return append([]string{t.root}, t.extraRoots.Effective...)
 }
