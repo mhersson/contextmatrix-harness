@@ -288,3 +288,51 @@ func (skillStub) Schema() llm.Tool {
 func (skillStub) Execute(context.Context, map[string]any) (tools.Result, error) {
 	return tools.Result{}, nil
 }
+
+// TestSpawnSubagentsWrapUpNudgePropagates proves that SubagentSpec.WrapUpTurns
+// and WrapUpMessage are forwarded into the child Config, mirroring
+// TestWrapUpNudgeInjectedOnceAtThreshold's assertion style (burnLLM burns
+// every turn, so the child always hits max_turns).
+func TestSpawnSubagentsWrapUpNudgePropagates(t *testing.T) {
+	root := t.TempDir()
+	w := &burnLLM{}
+
+	specs := []SubagentSpec{
+		{Role: "worker", Prompt: "task", MaxTurns: 6, WrapUpTurns: 2, WrapUpMessage: "wrap up now"},
+	}
+
+	results, err := SpawnSubagents(context.Background(), w, root, newEmitter(), specs,
+		SubagentOpts{MaxDepth: 2, DefaultModel: "test/model"})
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.Len(t, w.requests, 6)
+
+	// Fires at the top of the turn that leaves exactly 2 remaining: after 4
+	// consumed turns, i.e. in request 5 (index 4) - and exactly once, ever.
+	assert.Equal(t, 0, countUserMsg(w.requests[3], "wrap up now"), "no nudge before the threshold")
+	assert.Equal(t, 1, countUserMsg(w.requests[4], "wrap up now"), "nudge lands when WrapUpTurns remain")
+	assert.Equal(t, 1, countUserMsg(w.requests[5], "wrap up now"), "nudge is injected exactly once")
+}
+
+// TestSpawnSubagentsWrapUpNudgeOffByDefault proves a spec with a zero
+// WrapUpTurns (the SubagentSpec zero value) gets no nudge, preserving prior
+// behavior for every existing spec.
+func TestSpawnSubagentsWrapUpNudgeOffByDefault(t *testing.T) {
+	root := t.TempDir()
+	w := &burnLLM{}
+
+	specs := []SubagentSpec{{Role: "worker", Prompt: "task", MaxTurns: 4}}
+
+	_, err := SpawnSubagents(context.Background(), w, root, newEmitter(), specs,
+		SubagentOpts{MaxDepth: 2, DefaultModel: "test/model"})
+	require.NoError(t, err)
+	require.Len(t, w.requests, 4)
+
+	for i, req := range w.requests {
+		for _, m := range req.Messages {
+			if m.Role == "user" {
+				assert.Equal(t, "task", m.Content, "request %d: no nudge when WrapUpTurns is zero", i+1)
+			}
+		}
+	}
+}

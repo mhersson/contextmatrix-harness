@@ -19,6 +19,8 @@ type SubagentSpec struct {
 	MaxTurns      int     // 0 -> harness default
 	MaxCostUSD    float64 // 0 -> per-child share of the aggregate cap
 	ContextWindow int     // child model's context window; 0 disables the check
+	WrapUpTurns   int     // 0 -> no wrap-up nudge (previous behavior)
+	WrapUpMessage string  // injected when WrapUpTurns remain
 }
 
 // SubagentResult is one child's structured result.
@@ -94,6 +96,8 @@ func SpawnSubagents(ctx context.Context, client llm.LLM, root string, emit *even
 					ContextWindow:      spec.ContextWindow,
 					ToolOutputMaxBytes: opts.ToolOutputMaxBytes,
 					RedactToolOutput:   opts.RedactToolOutput,
+					WrapUpTurns:        spec.WrapUpTurns,
+					WrapUpMessage:      spec.WrapUpMessage,
 				})
 			results[i] = SubagentResult{Role: spec.Role, Output: res.Output, Result: res, Err: err}
 		}(i, spec)
