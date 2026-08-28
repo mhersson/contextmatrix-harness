@@ -509,8 +509,7 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 
 		for i, tc := range resp.ToolCalls {
 			if interrupted {
-				msgs = append(msgs, toolResultMsg(tc.ID, "skipped: user interjected"))
-				emit.Emit(events.ToolResult, map[string]any{"id": tc.ID, "skipped": true})
+				msgs = append(msgs, skipToolCall(emit, tc, "skipped: user interjected", nil))
 
 				continue
 			}
@@ -521,11 +520,7 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 			// second terminal call would report twice - tools.Terminal carries no
 			// idempotency contract.
 			if terminated {
-				msgs = append(msgs, toolResultMsg(tc.ID, postTerminalResult))
-				// The name is carried here because no ToolCallKind event is
-				// emitted for a call that never dispatches: it is the only record
-				// of what the model batched after ending the run.
-				emit.Emit(events.ToolResult, map[string]any{"id": tc.ID, "name": tc.Function.Name, "skipped": true, "already_terminated": true})
+				msgs = append(msgs, skipToolCall(emit, tc, postTerminalResult, map[string]any{"already_terminated": true}))
 
 				continue
 			}
@@ -812,4 +807,25 @@ func toolResultMsg(id, content string) llm.Message {
 	}
 
 	return llm.Message{Role: "tool", ToolCallID: id, Content: content}
+}
+
+// skipToolCall answers a tool call that never dispatches - dropped by a
+// mid-batch interrupt or batched after an earlier call already terminated
+// the run. ToolCallKind's semantics is "the model requested this call",
+// which holds here too, so it emits a paired tool_call event carrying the
+// not-dispatched marker before the tool_result event: every tool_result on
+// the stream then has a matching tool_call, with no implication the call
+// executed. extra merges additional fields into the tool_result event's
+// data; nil is fine. Returns the tool-role message for the caller to append.
+func skipToolCall(emit *events.Emitter, tc llm.ToolCall, resultContent string, extra map[string]any) llm.Message {
+	emit.Emit(events.ToolCallKind, map[string]any{"id": tc.ID, "name": tc.Function.Name, "dispatched": false})
+
+	data := map[string]any{"id": tc.ID, "skipped": true}
+	for k, v := range extra {
+		data[k] = v
+	}
+
+	emit.Emit(events.ToolResult, data)
+
+	return toolResultMsg(tc.ID, resultContent)
 }

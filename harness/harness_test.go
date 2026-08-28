@@ -466,6 +466,78 @@ func unansweredToolCalls(msgs []llm.Message) []string {
 	return missing
 }
 
+// assertEveryToolResultHasCall verifies the event stream's core pairing
+// invariant: every tool_result event's id has a matching tool_call event,
+// whether or not the call actually dispatched. An orphan tool_result breaks
+// any consumer that pairs tool calls to their results.
+func assertEveryToolResultHasCall(t *testing.T, evs []events.Event) {
+	t.Helper()
+
+	called := map[string]bool{}
+
+	for _, ev := range evs {
+		if ev.Kind == events.ToolCallKind {
+			if id, ok := ev.Data["id"].(string); ok {
+				called[id] = true
+			}
+		}
+	}
+
+	for _, ev := range evs {
+		if ev.Kind != events.ToolResult {
+			continue
+		}
+
+		id, _ := ev.Data["id"].(string)
+		assert.True(t, called[id], "tool_result for id %q has no paired tool_call event", id)
+	}
+}
+
+// TestSkipToolCall drives the shared helper both undispatched-call branches
+// use: it must emit a paired tool_call event carrying the not-dispatched
+// marker before the tool_result event, and return the tool-role message
+// unchanged from today's synthesized skip content.
+func TestSkipToolCall(t *testing.T) {
+	tc := toolCall("7", "after", `{"x":1}`)
+
+	t.Run("base shape", func(t *testing.T) {
+		var transcript bytes.Buffer
+
+		emit := events.NewEmitter(nil, &transcript)
+
+		msg := skipToolCall(emit, tc, "skipped: user interjected", nil)
+
+		assert.Equal(t, "tool", msg.Role)
+		assert.Equal(t, "7", msg.ToolCallID)
+		assert.Equal(t, "skipped: user interjected", msg.Content)
+
+		evs := parseEvents(t, transcript.String())
+		require.Len(t, evs, 2, "exactly one paired tool_call and one tool_result")
+
+		assert.Equal(t, events.ToolCallKind, evs[0].Kind, "the tool_call event precedes the tool_result")
+		assert.Equal(t, "7", evs[0].Data["id"])
+		assert.Equal(t, "after", evs[0].Data["name"])
+		assert.Equal(t, false, evs[0].Data["dispatched"], "marks the call as not dispatched")
+
+		assert.Equal(t, events.ToolResult, evs[1].Kind)
+		assert.Equal(t, "7", evs[1].Data["id"])
+		assert.Equal(t, true, evs[1].Data["skipped"])
+	})
+
+	t.Run("extra result fields merge in", func(t *testing.T) {
+		var transcript bytes.Buffer
+
+		emit := events.NewEmitter(nil, &transcript)
+
+		skipToolCall(emit, tc, "unexecuted", map[string]any{"already_terminated": true})
+
+		evs := parseEvents(t, transcript.String())
+		require.Len(t, evs, 2)
+		assert.Equal(t, true, evs[1].Data["already_terminated"])
+		assert.Equal(t, true, evs[1].Data["skipped"], "the base skip marker still applies")
+	})
+}
+
 // TestRunTerminatingToolBatchAnswersPostTerminalCalls pins that calls batched
 // after a successful terminating call are answered but never executed: the run
 // has logically ended, and the terminating call's outward report was computed
@@ -559,9 +631,9 @@ func TestRunTerminatingToolBatchAnswersPostTerminalCalls(t *testing.T) {
 }
 
 // TestRunPostTerminalCallEventTrail pins the observability of a call answered
-// without dispatching: it emits no tool_call event - nothing was dispatched -
-// and its tool_result names the tool, the only remaining record of what the
-// model batched after ending the run.
+// without dispatching: it emits a paired tool_call event first, carrying the
+// not-dispatched marker (nothing was executed), then its tool_result - the
+// same shape the interrupt skip path uses via the shared helper.
 func TestRunPostTerminalCallEventTrail(t *testing.T) {
 	fin := &finishTool{}
 	after := &countingTool{name: "after"}
@@ -586,23 +658,28 @@ func TestRunPostTerminalCallEventTrail(t *testing.T) {
 	assert.Equal(t, 1, res.ToolCallCount, "only the dispatched call counts")
 
 	evs := parseEvents(t, transcript.String())
+	assertEveryToolResultHasCall(t, evs)
 
-	var result *events.Event
+	var call, result *events.Event
 
 	for i, ev := range evs {
 		if ev.Data["id"] != "2" {
 			continue
 		}
 
-		assert.NotEqual(t, events.ToolCallKind, ev.Kind, "an unexecuted call emits no tool_call event")
-
-		if ev.Kind == events.ToolResult {
+		switch ev.Kind {
+		case events.ToolCallKind:
+			call = &evs[i]
+		case events.ToolResult:
 			result = &evs[i]
 		}
 	}
 
+	require.NotNil(t, call, "the unexecuted call must still emit a paired tool_call event")
+	assert.Equal(t, "after", call.Data["name"], "the paired call names the tool the model batched after the run ended")
+	assert.Equal(t, false, call.Data["dispatched"], "marks the call as not dispatched")
+
 	require.NotNil(t, result, "the unexecuted call must still emit a tool_result event")
-	assert.Equal(t, "after", result.Data["name"], "the result names the tool the model batched after the run ended")
 	assert.Equal(t, true, result.Data["already_terminated"])
 }
 
@@ -1233,6 +1310,61 @@ func TestInboxMidBatchInterrupt(t *testing.T) {
 	uIdx := userMessageIndexAfter(second, lastToolIdx)
 	require.GreaterOrEqual(t, uIdx, 0, "user message must follow the tool results")
 	assert.Equal(t, "stop and listen", second[uIdx].Content)
+}
+
+// TestInboxMidBatchInterruptEventTrail pins the same shape
+// TestRunPostTerminalCallEventTrail pins for the other skip path: a call
+// dropped by a mid-batch interrupt emits a paired tool_call event (marked
+// not dispatched) before its tool_result, via the shared skipToolCall helper.
+func TestInboxMidBatchInterruptEventTrail(t *testing.T) {
+	inbox := &scriptedInbox{closeErr: ErrInboxClosed}
+	it := &interjectingTool{inbox: inbox, msg: UserMessage{Content: "stop and listen", MessageID: "m1"}}
+	reg := tools.NewRegistry(it)
+
+	capt := &capturingLLMSeq{responses: []llm.Response{
+		{ToolCalls: []llm.ToolCall{
+			toolCall("1", "interject", `{}`),
+			toolCall("2", "interject", `{}`),
+			toolCall("3", "interject", `{}`),
+		}},
+		{Content: "done", FinishReason: "stop"},
+	}}
+
+	var transcript bytes.Buffer
+
+	emit := events.NewEmitter(nil, &transcript)
+
+	res, err := Run(context.Background(), capt, reg, emit, "task", Config{MaxTurns: 10, Inbox: inbox})
+	require.NoError(t, err)
+	assert.True(t, res.Completed)
+
+	evs := parseEvents(t, transcript.String())
+	assertEveryToolResultHasCall(t, evs)
+
+	for _, id := range []string{"2", "3"} {
+		var call, result *events.Event
+
+		for i, ev := range evs {
+			if ev.Data["id"] != id {
+				continue
+			}
+
+			switch ev.Kind {
+			case events.ToolCallKind:
+				call = &evs[i]
+			case events.ToolResult:
+				result = &evs[i]
+			}
+		}
+
+		require.NotNil(t, call, "skipped call %s must emit a paired tool_call event", id)
+		assert.Equal(t, "interject", call.Data["name"])
+		assert.Equal(t, false, call.Data["dispatched"], "marks call %s as not dispatched", id)
+
+		require.NotNil(t, result, "skipped call %s must emit a tool_result event", id)
+		assert.Equal(t, true, result.Data["skipped"])
+		assert.NotContains(t, result.Data, "already_terminated", "an interrupt skip is not a post-terminal skip")
+	}
 }
 
 func TestRunDetectsIncapability(t *testing.T) {
