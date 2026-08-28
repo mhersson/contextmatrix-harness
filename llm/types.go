@@ -137,18 +137,18 @@ type Usage struct {
 // Buckets normalizes both cache wire shapes into disjoint token buckets
 // matching the Anthropic pricing model, where prompt excludes cache traffic:
 // the OpenAI subset shape has cached_tokens subtracted out of prompt; the
-// Anthropic-shim shape passes through unchanged. When both appear the shim
-// value wins for cacheRead. Absent cache info yields (prompt_tokens, 0, 0).
+// Anthropic-shim shape passes through unchanged. When both appear (LiteLLM-
+// family shims), the shim value wins for cacheRead and the subset
+// subtraction is skipped - prompt_tokens is already disjoint on that wire.
+// Absent cache info yields (prompt_tokens, 0, 0).
 func (u Usage) Buckets() (prompt, cacheRead, cacheCreation int) {
 	prompt = u.PromptTokens
 
-	if u.PromptTokensDetails != nil && u.PromptTokensDetails.CachedTokens > 0 {
-		cacheRead = min(u.PromptTokensDetails.CachedTokens, prompt)
-		prompt -= cacheRead
-	}
-
 	if u.CacheReadInputTokens > 0 {
 		cacheRead = u.CacheReadInputTokens
+	} else if u.PromptTokensDetails != nil && u.PromptTokensDetails.CachedTokens > 0 {
+		cacheRead = min(u.PromptTokensDetails.CachedTokens, prompt)
+		prompt -= cacheRead
 	}
 
 	return prompt, cacheRead, u.CacheCreationInputTokens

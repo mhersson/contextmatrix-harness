@@ -104,6 +104,13 @@ func TestUsageBuckets(t *testing.T) {
 			prompt:    0,
 			cacheRead: 50,
 		},
+		{
+			name:          "both shapes present counts prompt and cacheRead once",
+			raw:           `{"prompt_tokens":100,"completion_tokens":10,"prompt_tokens_details":{"cached_tokens":80},"cache_read_input_tokens":500,"cache_creation_input_tokens":40}`,
+			prompt:        100,
+			cacheRead:     500,
+			cacheCreation: 40,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
