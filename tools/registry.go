@@ -35,21 +35,10 @@ type Terminal interface {
 	Terminal() bool
 }
 
-// ReadOnly marks a tool whose calls have no side effects: the call reports on
-// state without changing it. Two consequences the harness relies on - several
-// such calls in one turn return exactly what they would have returned one at a
-// time, and repeating one cannot itself be the point of the call.
-//
-// It says nothing about whether the MODEL's next lookup depends on the previous
-// one's result. That dependency is common (grep to find the file, then read it)
-// and only the model can judge it, which is why the harness never groups calls
-// itself - it only counts turn shapes and can suggest grouping
-// (Config.BatchNudgeTurns).
-//
-// Tools that change state must NOT implement it. bash in particular: shell
-// commands run for their effects, so grouping a build or test command with the
-// edit it is meant to check would be actively harmful, and re-running one after
-// an edit is usually correct rather than wasteful.
+// ReadOnly marks a tool whose calls have no side effects: several such calls in
+// one turn return exactly what they would have returned one at a time. Tools
+// that change state must NOT implement it - bash in particular is deliberately
+// unmarked, because shell commands run for their effects.
 type ReadOnly interface {
 	ReadOnly() bool
 }

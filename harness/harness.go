@@ -221,15 +221,6 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 	// nudged guards the one-shot wrap-up injection.
 	nudged := false
 
-	// repeated maps "<tool>\x00<normalized args>" to the turn that already made
-	// that call, so an identical read-only call is answered from the record
-	// instead of spending the call again. It is cleared whenever the state its
-	// entries describe may have moved: any call to a tool the harness cannot
-	// prove side-effect-free, a compaction (the model genuinely lost the earlier
-	// result), or a human interjection.
-	repeated := map[string]int{}
-	humanMsgs := humanTurns(msgs)
-
 	// batchNudged guards the one-shot batching injection; singleBatchTurns counts
 	// the consecutive turns that each spent a whole model call on one read-only
 	// tool call. Any other turn shape resets it.
@@ -248,22 +239,6 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 
 		msgs = drainInbox(cfg, msgs, emit)
 
-		// Every path that delivers human input appends a plain-text user message
-		// and comes back through the top of this loop, so one check here covers
-		// the mid-batch drain, the await-input recovery and the no-tool-call
-		// branch alike. A human who says a file changed must not be answered
-		// from a skipped call.
-		//
-		// Growth only: compaction REMOVES user messages, and its own reset below
-		// owns that case - counting a decrease here would hide it.
-		if n := humanTurns(msgs); n > humanMsgs {
-			humanMsgs = n
-
-			clear(repeated)
-		} else {
-			humanMsgs = n
-		}
-
 		if !cfg.Interactive && cfg.WrapUpTurns > 0 && !nudged &&
 			cfg.MaxTurns-res.Turns == cfg.WrapUpTurns {
 			nudged = true
@@ -274,7 +249,6 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 			}
 
 			msgs = append(msgs, llm.Message{Role: "user", Content: msg})
-			humanMsgs++ // synthetic, not human: must not invalidate the repeat guard
 
 			emit.Emit(events.StateChange, map[string]any{"event": "wrap_up_nudge", "turns_remaining": cfg.WrapUpTurns})
 		} else if cfg.BatchNudgeTurns > 0 && !batchNudged && !nudged &&
@@ -290,7 +264,6 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 			}
 
 			msgs = append(msgs, llm.Message{Role: "user", Content: msg})
-			humanMsgs++ // synthetic, not human: must not invalidate the repeat guard
 
 			emit.Emit(events.StateChange, map[string]any{"event": "batch_nudge", "single_call_turns": singleBatchTurns})
 		}
@@ -397,10 +370,6 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 							"cost_usd": cUsage.Cost, "model": cfg.Model, "phase": "compaction",
 							"cache_read_tokens": cCacheRead, "cache_creation_tokens": cCacheCreation,
 						})
-
-						// The summary replaced the earlier tool results, so the model
-						// has genuinely lost them: a repeat is a real request now.
-						clear(repeated)
 					}
 
 					if cerr == nil && len(newMsgs) < len(msgs) {
@@ -582,33 +551,7 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 				// loop regardless of whether Execute succeeds or returns a domain error.
 				turnHadCapableTool = true
 
-				// repeatKey is set only for a read-only call that reaches Execute;
-				// it is recorded after a SUCCESS, because a failed call produced no
-				// result for a later identical call to be pointed at.
-				repeatKey := ""
-
-				if !readOnlyTool(tool) {
-					// Not provably side-effect-free: assume it moved the state every
-					// recorded result describes. Cheap to be wrong this way; the
-					// opposite costs correctness.
-					clear(repeated)
-				} else {
-					key := tc.Function.Name + "\x00" + normalizeArgs(tc.Function.Arguments)
-					if prev, seen := repeated[key]; seen {
-						msg := fmt.Sprintf("skipped: an identical %s call was already made at turn %d and nothing since could have changed its result - use that result", tc.Function.Name, prev)
-
-						msgs = append(msgs, toolResultMsg(tc.ID, msg))
-						emit.Emit(events.ToolResult, map[string]any{"id": tc.ID, "skipped": true, "repeat_of_turn": prev})
-
-						return
-					}
-
-					repeatKey = key
-
-					// Counted here, not above the skip: a call the guard answered from
-					// the record spent no round trip on a lookup, so it is not the turn
-					// shape the batching nudge exists to catch. A model repeating one
-					// call is looping, and a nudge to batch would misdiagnose it.
+				if readOnlyTool(tool) {
 					turnReadOnly = true
 				}
 
@@ -650,10 +593,6 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 				turnImages = append(turnImages, out.Images...) // nil-safe; images delivered after the batch
 
 				emit.Emit(events.ToolResult, map[string]any{"id": tc.ID, "output_len": len(text)})
-
-				if repeatKey != "" {
-					repeated[repeatKey] = res.Turns
-				}
 
 				if term, isTerminal := tool.(tools.Terminal); isTerminal && term.Terminal() && !terminated {
 					terminated = true
@@ -833,24 +772,6 @@ func awaitNext(ctx context.Context, cfg Config, msgs []llm.Message, emit *events
 	msgs = append(msgs, llm.Message{Role: "user", Content: um.Content})
 
 	return msgs, "continue", nil
-}
-
-// humanTurns counts plain-text user messages: the seeded task, any history
-// seed, and every human interjection. Tool-image messages carry ContentParts
-// instead and are excluded - they come from tool output, not from someone who
-// may have changed the workspace. The synthetic nudges are excluded too: each
-// injection site advances humanMsgs itself, so a message the harness wrote to
-// itself is never mistaken for a human who may have changed a file.
-func humanTurns(msgs []llm.Message) int {
-	n := 0
-
-	for _, m := range msgs {
-		if m.Role == "user" && m.ContentParts == nil {
-			n++
-		}
-	}
-
-	return n
 }
 
 // readOnlyTool reports whether t is a ReadOnly, non-Terminal tool - the tool
