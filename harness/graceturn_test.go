@@ -496,4 +496,9 @@ func TestGraceTurnUsageEventCarriesCacheBuckets(t *testing.T) {
 	assert.InDelta(t, 40.0, graceUsageEv.Data["prompt_tokens"], 0, "prompt_tokens must exclude the cached portion")
 	assert.InDelta(t, 20.0, graceUsageEv.Data["completion_tokens"], 0, "completion_tokens must be preserved")
 	assert.InDelta(t, 0.5, graceUsageEv.Data["cost_usd"], 0, "cost_usd must be preserved")
+
+	// OpenAI-shape wire: the subset was subtracted out, so the raw wire value
+	// is larger than the disjoint bucket. The grace call mirrors the main
+	// loop's usage accounting, so it must carry the same self-describing field.
+	assert.InDelta(t, 100.0, graceUsageEv.Data["wire_prompt_tokens"], 0, "wire_prompt_tokens must carry the pre-normalization value")
 }

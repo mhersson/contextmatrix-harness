@@ -354,6 +354,13 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 			"prompt_tokens": prompt, "completion_tokens": resp.Usage.CompletionTokens,
 			"cost_usd": resp.Usage.Cost, "model": cfg.Model,
 			"cache_read_tokens": cacheRead, "cache_creation_tokens": cacheCreation,
+			// wire_prompt_tokens is the raw pre-normalization wire value
+			// (Usage.PromptTokens, untouched by Buckets()): equal to
+			// prompt_tokens on an already-disjoint wire, larger when the
+			// subset subtraction ran. Makes rows self-describing across a
+			// mixed-version fleet without changing the meaning of the
+			// existing prompt_tokens field.
+			"wire_prompt_tokens": resp.Usage.PromptTokens,
 		})
 
 		if cfg.ContextWindow > 0 {
@@ -376,6 +383,7 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 							"prompt_tokens": cPrompt, "completion_tokens": cUsage.CompletionTokens,
 							"cost_usd": cUsage.Cost, "model": cfg.Model, "phase": "compaction",
 							"cache_read_tokens": cCacheRead, "cache_creation_tokens": cCacheCreation,
+							"wire_prompt_tokens": cUsage.PromptTokens,
 						})
 					}
 

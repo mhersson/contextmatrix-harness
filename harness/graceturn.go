@@ -177,6 +177,7 @@ func sendTurn(ctx context.Context, client llm.LLM, emit *events.Emitter, cfg Con
 		"prompt_tokens": prompt, "completion_tokens": resp.Usage.CompletionTokens,
 		"cost_usd": resp.Usage.Cost, "model": cfg.Model,
 		"cache_read_tokens": cacheRead, "cache_creation_tokens": cacheCreation,
+		"wire_prompt_tokens": resp.Usage.PromptTokens,
 	})
 
 	return resp, nil
