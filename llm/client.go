@@ -25,6 +25,7 @@ type Client struct {
 	dialect Dialect
 	retry   RetryPolicy
 	sleep   func(context.Context, time.Duration) error
+	stall   time.Duration
 }
 
 type Option func(*Client)
@@ -33,8 +34,13 @@ func WithBaseURL(u string) Option          { return func(c *Client) { c.baseURL 
 func WithDialect(d Dialect) Option         { return func(c *Client) { c.dialect = d } }
 func WithHTTPClient(h *http.Client) Option { return func(c *Client) { c.http = h } }
 
+// WithStallTimeout bounds silence on the SSE stream: no bytes at all - data
+// or keepalive - within the window closes the body so the stream-phase retry
+// in SendStream can catch it. 0 disables the check.
+func WithStallTimeout(d time.Duration) Option { return func(c *Client) { c.stall = d } }
+
 func NewClient(apiKey string, opts ...Option) *Client {
-	c := &Client{http: &http.Client{}, baseURL: defaultBaseURL, apiKey: apiKey, sleep: ctxSleep}
+	c := &Client{http: &http.Client{}, baseURL: defaultBaseURL, apiKey: apiKey, sleep: ctxSleep, stall: 5 * time.Minute}
 	for _, o := range opts {
 		o(c)
 	}
@@ -84,8 +90,13 @@ func (c *Client) SendStream(ctx context.Context, req Request, onDelta func(Delta
 			return Response{}, fmt.Errorf("llm endpoint status %d: %s", hr.StatusCode, string(body))
 		}
 
-		resp, perr := parseStream(hr.Body, onDelta)
-		_ = hr.Body.Close() //nolint:errcheck
+		body := hr.Body
+		if c.stall > 0 {
+			body = newStallReader(hr.Body, c.stall)
+		}
+
+		resp, perr := parseStream(body, onDelta)
+		_ = body.Close() //nolint:errcheck
 
 		if perr == nil {
 			return resp, nil
