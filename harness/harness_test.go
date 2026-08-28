@@ -466,12 +466,21 @@ func unansweredToolCalls(msgs []llm.Message) []string {
 	return missing
 }
 
-func TestRunTerminatingToolBatchExecutesEveryCall(t *testing.T) {
+// TestRunTerminatingToolBatchAnswersPostTerminalCalls pins that calls batched
+// after a successful terminating call are answered but never executed: the run
+// has logically ended, and the terminating call's outward report was computed
+// before any such side effect could land. Every call still owes a result - the
+// assistant message references its ID, and an unanswered ID makes the history
+// this run carries out malformed.
+func TestRunTerminatingToolBatchAnswersPostTerminalCalls(t *testing.T) {
 	tests := []struct {
-		name       string
-		calls      []llm.ToolCall
-		wantBefore int
-		wantAfter  int
+		name string
+		// calls is one batch; every call after the terminating one must be
+		// answered with the synthetic result instead of dispatched.
+		calls          []llm.ToolCall
+		wantBefore     int
+		wantAfter      int
+		wantUnexecuted []string
 	}{
 		{
 			name: "terminating call first",
@@ -480,8 +489,9 @@ func TestRunTerminatingToolBatchExecutesEveryCall(t *testing.T) {
 				toolCall("2", "before", `{}`),
 				toolCall("3", "after", `{}`),
 			},
-			wantBefore: 1,
-			wantAfter:  1,
+			wantBefore:     0,
+			wantAfter:      0,
+			wantUnexecuted: []string{"2", "3"},
 		},
 		{
 			name: "terminating call in the middle",
@@ -490,8 +500,9 @@ func TestRunTerminatingToolBatchExecutesEveryCall(t *testing.T) {
 				toolCall("2", "finish", `{"commit_message":"x"}`),
 				toolCall("3", "after", `{}`),
 			},
-			wantBefore: 1,
-			wantAfter:  1,
+			wantBefore:     1,
+			wantAfter:      0,
+			wantUnexecuted: []string{"3"},
 		},
 		{
 			name: "terminating call last",
@@ -510,8 +521,9 @@ func TestRunTerminatingToolBatchExecutesEveryCall(t *testing.T) {
 				toolCall("2", "finish", `{"commit_message":"x"}`),
 				toolCall("3", "nosuch", `{}`),
 			},
-			wantBefore: 1,
-			wantAfter:  0,
+			wantBefore:     1,
+			wantAfter:      0,
+			wantUnexecuted: []string{"3"},
 		},
 	}
 
@@ -535,8 +547,63 @@ func TestRunTerminatingToolBatchExecutesEveryCall(t *testing.T) {
 			assert.Equal(t, tt.wantAfter, after.calls)
 			assert.JSONEq(t, `{"commit_message":"x"}`, string(res.CompletionArgs), "surfaces the terminating call's args")
 			assert.Empty(t, unansweredToolCalls(res.Messages), "every tool call in the batch receives a result message")
+			assert.Zero(t, res.ToolCallFailures, "a call left unexecuted is not a failed call")
+
+			for _, id := range tt.wantUnexecuted {
+				out, ok := findToolResult(res.Messages, id)
+				require.True(t, ok, "call %s must be answered", id)
+				assert.Contains(t, out, "unexecuted", "call %s must carry the synthetic post-terminal result", id)
+			}
 		})
 	}
+}
+
+// TestRunPostTerminalCallEventTrail pins the observability of a call answered
+// without dispatching: it emits no tool_call event - nothing was dispatched -
+// and its tool_result names the tool, the only remaining record of what the
+// model batched after ending the run.
+func TestRunPostTerminalCallEventTrail(t *testing.T) {
+	fin := &finishTool{}
+	after := &countingTool{name: "after"}
+	reg := tools.NewRegistry(fin, after)
+
+	f := &fakeLLM{responses: []llm.Response{
+		{ToolCalls: []llm.ToolCall{
+			toolCall("1", "finish", `{"commit_message":"x"}`),
+			toolCall("2", "after", `{}`),
+		}},
+	}}
+
+	var transcript bytes.Buffer
+
+	emit := events.NewEmitter(nil, &transcript)
+
+	res, err := Run(context.Background(), f, reg, emit, "task", Config{MaxTurns: 5})
+	require.NoError(t, err)
+	require.True(t, res.Completed)
+	require.Zero(t, after.calls, "the post-terminal call must not execute")
+
+	assert.Equal(t, 1, res.ToolCallCount, "only the dispatched call counts")
+
+	evs := parseEvents(t, transcript.String())
+
+	var result *events.Event
+
+	for i, ev := range evs {
+		if ev.Data["id"] != "2" {
+			continue
+		}
+
+		assert.NotEqual(t, events.ToolCallKind, ev.Kind, "an unexecuted call emits no tool_call event")
+
+		if ev.Kind == events.ToolResult {
+			result = &evs[i]
+		}
+	}
+
+	require.NotNil(t, result, "the unexecuted call must still emit a tool_result event")
+	assert.Equal(t, "after", result.Data["name"], "the result names the tool the model batched after the run ended")
+	assert.Equal(t, true, result.Data["already_terminated"])
 }
 
 func TestRunTerminatingToolExecuteErrorDoesNotTerminate(t *testing.T) {
@@ -2036,8 +2103,7 @@ func TestRunCompactionUsageEventCarriesCacheBuckets(t *testing.T) {
 // TestRunDuplicateTerminalCallExecutesOnce pins that a second terminal call in
 // one batch does not execute the terminal tool again. tools.Terminal carries no
 // idempotency contract, and a terminal tool typically reports completion
-// outward, so running it twice reports twice. Calls that are not terminal still
-// execute - dropping them silently is the defect this batch behaviour replaced.
+// outward, so running it twice reports twice.
 func TestRunDuplicateTerminalCallExecutesOnce(t *testing.T) {
 	fin := &finishTool{}
 	after := &countingTool{name: "after"}
@@ -2056,6 +2122,12 @@ func TestRunDuplicateTerminalCallExecutesOnce(t *testing.T) {
 
 	assert.Equal(t, 1, fin.calls, "the terminating tool executes once per batch")
 	assert.JSONEq(t, `{"commit_message":"first"}`, string(res.CompletionArgs), "the first terminal call wins")
-	assert.Equal(t, 1, after.calls, "non-terminal calls still execute, as CTXHNS-015 requires")
+	assert.Zero(t, after.calls, "a call batched after the terminating one does not execute")
 	assert.Empty(t, unansweredToolCalls(res.Messages), "every call is still answered")
+
+	for _, id := range []string{"2", "3"} {
+		out, ok := findToolResult(res.Messages, id)
+		require.True(t, ok, "call %s must be answered", id)
+		assert.Contains(t, out, "unexecuted", "call %s must carry the synthetic post-terminal result", id)
+	}
 }

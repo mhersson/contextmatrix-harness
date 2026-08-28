@@ -25,6 +25,13 @@ const defaultIncapableThreshold = 3
 // ever execute successfully, indicating it cannot drive the tool loop.
 const ReasonIncapable = "incapable"
 
+// postTerminalResult answers a tool call batched after a terminating call
+// succeeded. The call is never dispatched - the run has ended and the terminal
+// call's outward report was computed before any such side effect could land -
+// but it still owes a result, because the assistant message references its ID.
+// The model reads this text, so it states the fact and nothing else.
+const postTerminalResult = "unexecuted: an earlier call in this batch ended the run"
+
 // contextLimitThreshold is the fraction of the model's context window that, once
 // the prompt reaches it, makes the harness stop and return incomplete when no
 // Compaction is configured. With Config.Compaction set, in-window compaction
@@ -493,8 +500,9 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 		turnReadOnly := false
 
 		// terminated is set when a tools.Terminal tool executes successfully this
-		// turn; completionArgs carries that call's normalized arguments. The
-		// first terminal call in a batch wins.
+		// turn; completionArgs carries that call's normalized arguments. Once it
+		// is set no further call in the batch is dispatched, so the first terminal
+		// call in a batch wins.
 		terminated := false
 
 		var completionArgs json.RawMessage
@@ -503,6 +511,21 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 			if interrupted {
 				msgs = append(msgs, toolResultMsg(tc.ID, "skipped: user interjected"))
 				emit.Emit(events.ToolResult, map[string]any{"id": tc.ID, "skipped": true})
+
+				continue
+			}
+
+			// The run ended earlier in this batch: answer the remaining calls
+			// without dispatching them. Executing them would land side effects
+			// after the terminal call already reported completion outward, and a
+			// second terminal call would report twice - tools.Terminal carries no
+			// idempotency contract.
+			if terminated {
+				msgs = append(msgs, toolResultMsg(tc.ID, postTerminalResult))
+				// The name is carried here because no ToolCallKind event is
+				// emitted for a call that never dispatches: it is the only record
+				// of what the model batched after ending the run.
+				emit.Emit(events.ToolResult, map[string]any{"id": tc.ID, "name": tc.Function.Name, "skipped": true, "already_terminated": true})
 
 				continue
 			}
@@ -555,18 +578,6 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 					turnReadOnly = true
 				}
 
-				// A terminal call ends the run; a second one in the same batch must not
-				// execute the tool again. tools.Terminal carries no idempotency
-				// contract, and a terminal tool typically reports completion outward.
-				if term, isTerminal := tool.(tools.Terminal); isTerminal && term.Terminal() && terminated {
-					msg := "skipped: an earlier call in this batch already ended the run"
-
-					msgs = append(msgs, toolResultMsg(tc.ID, msg))
-					emit.Emit(events.ToolResult, map[string]any{"id": tc.ID, "skipped": true, "already_terminated": true})
-
-					return
-				}
-
 				out, err := tool.Execute(ctx, args)
 				if err != nil {
 					res.ToolCallFailures++
@@ -594,15 +605,16 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 
 				emit.Emit(events.ToolResult, map[string]any{"id": tc.ID, "output_len": len(text)})
 
-				if term, isTerminal := tool.(tools.Terminal); isTerminal && term.Terminal() && !terminated {
+				if term, isTerminal := tool.(tools.Terminal); isTerminal && term.Terminal() {
 					terminated = true
 					completionArgs = json.RawMessage(normalizeArgs(tc.Function.Arguments))
 				}
 			}()
 
 			// Drain mid-batch only if there are remaining calls to skip. A batch
-			// that already terminated runs to the end regardless: the assistant
-			// message references every call ID, so every one still owes a result.
+			// that already terminated is walked to the end regardless: the
+			// assistant message references every call ID, so every one still owes
+			// a result.
 			if cfg.Inbox != nil && !terminated && i < len(resp.ToolCalls)-1 {
 				if pending := cfg.Inbox.Drain(); len(pending) > 0 {
 					interrupted = true
@@ -611,9 +623,9 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 			}
 		}
 
-		// A terminal call ends the run only once the whole batch has executed:
-		// returning mid-batch would drop the calls after it, leaving their IDs
-		// unanswered in the history this run carries out.
+		// A terminal call ends the run only once the whole batch has been
+		// answered: returning mid-batch would drop the calls after it, leaving
+		// their IDs unanswered in the history this run carries out.
 		if terminated {
 			res.Completed = true
 			res.Reason = "done"

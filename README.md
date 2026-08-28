@@ -57,7 +57,9 @@ A **successful** call to such a tool ends `Run` that turn with
 `Result.Completed = true`, `Result.Reason = "done"`, and the call's arguments on
 `Result.CompletionArgs` (a `json.RawMessage` the consumer unmarshals into its
 own type; empty arguments normalize to `{}`). Other tool calls in the same turn
-execute if they precede the terminating call and are skipped if they follow it.
+execute if they precede the terminating call. Calls that follow it are never
+executed - the run has already ended - but each still receives a synthetic tool
+result saying so, so the message history the run carries out stays well-formed.
 
 Termination gates on execution: a terminating tool that returns an error, or
 whose arguments fail to parse, does **not** end the run - the model receives the
