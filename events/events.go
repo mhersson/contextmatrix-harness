@@ -43,10 +43,39 @@ type Emitter struct {
 	human      io.Writer
 	transcript io.Writer
 	now        func() time.Time
+	static     map[string]any
 }
 
-func NewEmitter(human, transcript io.Writer) *Emitter {
-	return &Emitter{human: human, transcript: transcript, now: time.Now}
+// Option configures an Emitter at construction.
+type Option func(*Emitter)
+
+// WithEnvelopeFields stamps the given key/value pairs on the top level of
+// every emitted transcript envelope. The harness treats them as opaque -
+// callers use them to carry metadata (e.g. a retry/attempt ordinal) that
+// would otherwise require decoding and re-marshalling every event.
+//
+// A static field never overrides an envelope-owned key (seq, kind, time,
+// data): the envelope's own value always wins on collision, so a caller
+// mistake can never corrupt the fields the transcript format depends on.
+func WithEnvelopeFields(fields map[string]any) Option {
+	return func(e *Emitter) {
+		if e.static == nil {
+			e.static = make(map[string]any, len(fields))
+		}
+
+		for k, v := range fields {
+			e.static[k] = v
+		}
+	}
+}
+
+func NewEmitter(human, transcript io.Writer, opts ...Option) *Emitter {
+	e := &Emitter{human: human, transcript: transcript, now: time.Now}
+	for _, opt := range opts {
+		opt(e)
+	}
+
+	return e
 }
 
 // Emit records an event.
@@ -58,7 +87,7 @@ func (e *Emitter) Emit(kind Kind, data map[string]any) {
 
 	ev := Event{Seq: e.seq, Kind: kind, Time: e.now(), Data: data}
 	if e.transcript != nil {
-		if b, err := json.Marshal(ev); err == nil {
+		if b, err := json.Marshal(e.envelope(ev)); err == nil {
 			fmt.Fprintln(e.transcript, string(b)) //nolint:errcheck
 		}
 	}
@@ -66,6 +95,35 @@ func (e *Emitter) Emit(kind Kind, data map[string]any) {
 	if e.human != nil {
 		fmt.Fprintf(e.human, "[%d] %-14s %s\n", ev.Seq, ev.Kind, summarize(data)) //nolint:errcheck
 	}
+}
+
+// envelope returns the value to marshal for the transcript line. With no
+// static fields configured it returns ev unchanged, so the marshalled bytes
+// are identical to an emitter built without WithEnvelopeFields. Otherwise it
+// returns a map with the static fields merged in beneath the envelope's own
+// keys, so seq/kind/time/data always reflect ev, never a caller-supplied
+// value of the same name.
+func (e *Emitter) envelope(ev Event) any {
+	if len(e.static) == 0 {
+		return ev
+	}
+
+	m := make(map[string]any, len(e.static)+4)
+	for k, v := range e.static {
+		m[k] = v
+	}
+
+	m["seq"] = ev.Seq
+	m["kind"] = ev.Kind
+	m["time"] = ev.Time
+
+	if len(ev.Data) > 0 {
+		m["data"] = ev.Data
+	} else {
+		delete(m, "data")
+	}
+
+	return m
 }
 
 func summarize(data map[string]any) string {
