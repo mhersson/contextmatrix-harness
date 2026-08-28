@@ -69,13 +69,38 @@ func WithEnvelopeFields(fields map[string]any) Option {
 	}
 }
 
+// reservedEnvelopeKeys are the Event struct's own JSON keys. A static field
+// sharing one of these names is always overwritten by the envelope's own
+// value (see envelope) rather than ever reaching the transcript.
+var reservedEnvelopeKeys = []string{"seq", "kind", "time", "data"}
+
 func NewEmitter(human, transcript io.Writer, opts ...Option) *Emitter {
 	e := &Emitter{human: human, transcript: transcript, now: time.Now}
 	for _, opt := range opts {
 		opt(e)
 	}
 
+	e.warnCollisions()
+
 	return e
+}
+
+// warnCollisions writes one line to the human writer for each static field
+// whose key collides with an envelope-owned key, naming the field that will
+// never appear in an emitted envelope. It runs once, here at construction,
+// because the set of static field keys is fixed once NewEmitter returns -
+// no per-Emit check or sync.Once is needed. A nil human writer means there
+// is nowhere to warn, matching Emit's own nil-writer handling.
+func (e *Emitter) warnCollisions() {
+	if e.human == nil {
+		return
+	}
+
+	for _, k := range reservedEnvelopeKeys {
+		if _, collides := e.static[k]; collides {
+			fmt.Fprintf(e.human, "warning: static envelope field %q collides with an envelope-owned key; the real value always wins and the static one is dropped\n", k) //nolint:errcheck
+		}
+	}
 }
 
 // Emit records an event.

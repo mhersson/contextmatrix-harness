@@ -103,3 +103,50 @@ func TestEmitterStaticFieldsNeverOverrideEnvelopeKeys(t *testing.T) {
 	assert.Equal(t, map[string]any{"model": "x"}, m["data"], "real data must win over a colliding static field")
 	assert.Equal(t, 2, int(m["attempt"].(float64)), "non-colliding static field is still stamped") //nolint:forcetypeassert
 }
+
+// TestEmitterDataCollisionWithNoRealData covers the case where the event
+// itself carries no data (so envelope() never reaches its len(ev.Data) > 0
+// branch to overwrite the colliding key): a static field literally named
+// "data" must still not survive into the emitted envelope.
+func TestEmitterDataCollisionWithNoRealData(t *testing.T) {
+	var human, transcript bytes.Buffer
+
+	e := NewEmitter(&human, &transcript, WithEnvelopeFields(map[string]any{"data": "bogus"}))
+	e.now = func() time.Time { return time.Unix(0, 0).UTC() }
+
+	e.Emit(StateChange, nil)
+
+	var m map[string]any
+	require.NoError(t, json.Unmarshal(transcript.Bytes(), &m))
+
+	_, present := m["data"]
+	assert.False(t, present, "a colliding static \"data\" field must not survive an event with no real data")
+}
+
+// TestNewEmitterWarnsOnceOnCollidingStaticFields covers the fix-round
+// finding: a caller whose static field silently loses to an envelope-owned
+// key needs a visible signal, or they debug blind. The warning fires once,
+// at construction (the set of static keys never changes afterward), not
+// once per Emit call.
+func TestNewEmitterWarnsOnceOnCollidingStaticFields(t *testing.T) {
+	var human, transcript bytes.Buffer
+
+	e := NewEmitter(&human, &transcript, WithEnvelopeFields(map[string]any{
+		"seq":     999,
+		"data":    "bogus",
+		"attempt": 2,
+	}))
+	e.now = func() time.Time { return time.Unix(0, 0).UTC() }
+
+	warnings := human.String()
+	assert.Contains(t, warnings, "seq", "warning must name the colliding key")
+	assert.Contains(t, warnings, "data", "warning must name the colliding key")
+	assert.NotContains(t, warnings, "attempt", "a non-colliding field must not be warned about")
+
+	e.Emit(ModelRequest, map[string]any{"model": "x"})
+	e.Emit(ModelRequest, map[string]any{"model": "y"})
+	e.Emit(ModelRequest, map[string]any{"model": "z"})
+
+	assert.Equal(t, 1, strings.Count(human.String(), "seq"),
+		"the seq collision warning must be written once, not once per Emit call")
+}
