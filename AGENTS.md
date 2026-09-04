@@ -36,8 +36,11 @@ Orchestration, protocol, transport, and policy belong in the consuming backends
   otherwise.
 - Lint is strict (`wsl_v5`, `nlreturn`, `gosec`, `revive`, …) and `make lint` is
   the authority: blank line before `return`, no naked returns past 5 lines.
-- Do not write doc comments on simple functions - if what it does is
-  straightforward, the code itself is the documentation.
+- Comments explain only non-obvious decisions, constraints, safety invariants,
+  or workarounds. Do not narrate what code does or record change history; git
+  holds history. Keep comments to one or two tight lines unless a longer
+  explanation is genuinely necessary. Rewrite or delete if you find comments
+  that don't follow this rule.
 - Never use em-dashes; use hyphens (-).
 
 ## Key domain rules
