@@ -120,10 +120,11 @@ type UsageOpt struct {
 }
 
 // PromptTokensDetails is the OpenAI-shape nested usage detail. cached_tokens
-// counts the portion of prompt_tokens served from prompt cache - a SUBSET of
-// prompt_tokens on this wire shape.
+// counts tokens served from prompt cache; cache_write_tokens counts tokens
+// written to the cache. Both are SUBSETS of prompt_tokens on this wire shape.
 type PromptTokensDetails struct {
-	CachedTokens int `json:"cached_tokens"`
+	CachedTokens     int `json:"cached_tokens"`
+	CacheWriteTokens int `json:"cache_write_tokens"`
 }
 
 type Usage struct {
@@ -132,8 +133,8 @@ type Usage struct {
 	TotalTokens      int     `json:"total_tokens"`
 	Cost             float64 `json:"cost"` // OpenRouter authoritative USD for this call
 	// PromptTokensDetails carries the OpenAI-shape cached-token detail
-	// (cached_tokens is a subset of prompt_tokens). Emitted by OpenRouter and
-	// OpenAI-native gateways.
+	// (cached_tokens and cache_write_tokens are subsets of prompt_tokens).
+	// Emitted by OpenRouter and OpenAI-native gateways.
 	PromptTokensDetails *PromptTokensDetails `json:"prompt_tokens_details,omitempty"`
 	// CacheReadInputTokens / CacheCreationInputTokens are Anthropic-shim
 	// extensions (LiteLLM-style gateways) where cache buckets are DISJOINT
@@ -142,12 +143,24 @@ type Usage struct {
 	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
 }
 
-// Buckets normalizes both cache wire shapes into disjoint token buckets
-// matching the Anthropic pricing model, where prompt excludes cache traffic:
-// the OpenAI subset shape has cached_tokens subtracted out of prompt; the
-// Anthropic-shim shape passes through unchanged. When both appear (LiteLLM-
-// family shims), the shim value wins for cacheRead and the subset
-// subtraction is skipped - prompt_tokens is already disjoint on that wire.
+// Buckets normalizes per-token usage into three disjoint buckets: prompt
+// (plain input tokens), cacheRead (tokens served from prompt cache), and
+// cacheCreation (tokens written to the cache).
+//
+// The read bucket follows this precedence:
+//   - If CacheReadInputTokens > 0 (Anthropic-shim shape), that value is the
+//     read bucket outright and nothing is subtracted from prompt_tokens.
+//   - Otherwise, PromptTokensDetails.CachedTokens (OpenAI subset shape) is
+//     clamped to prompt_tokens and subtracted from it.
+//
+// The creation bucket mirrors the same rule independently:
+//   - If CacheCreationInputTokens > 0 (Anthropic-shim shape), that value is
+//     the creation bucket outright and nothing is subtracted from prompt_tokens.
+//   - Otherwise, PromptTokensDetails.CacheWriteTokens (OpenAI subset shape)
+//     is clamped to the prompt REMAINING after the read subtraction (order:
+//     cached_tokens subtracted first, then write clamped/subtracted) and
+//     subtracted from it.
+//
 // Absent cache info yields (prompt_tokens, 0, 0).
 func (u Usage) Buckets() (prompt, cacheRead, cacheCreation int) {
 	prompt = u.PromptTokens
@@ -159,7 +172,14 @@ func (u Usage) Buckets() (prompt, cacheRead, cacheCreation int) {
 		prompt -= cacheRead
 	}
 
-	return prompt, cacheRead, u.CacheCreationInputTokens
+	if u.CacheCreationInputTokens > 0 {
+		cacheCreation = u.CacheCreationInputTokens
+	} else if u.PromptTokensDetails != nil && u.PromptTokensDetails.CacheWriteTokens > 0 {
+		cacheCreation = min(u.PromptTokensDetails.CacheWriteTokens, prompt)
+		prompt -= cacheCreation
+	}
+
+	return prompt, cacheRead, cacheCreation
 }
 
 // Response is the assembled result of one model call (stream or non-stream).

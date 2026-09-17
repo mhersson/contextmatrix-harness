@@ -111,6 +111,39 @@ func TestUsageBuckets(t *testing.T) {
 			cacheRead:     500,
 			cacheCreation: 40,
 		},
+		{
+			name:          "cache_write_tokens only becomes cache creation",
+			raw:           `{"prompt_tokens":9586,"prompt_tokens_details":{"cache_write_tokens":9570}}`,
+			prompt:        16,
+			cacheCreation: 9570,
+		},
+		{
+			name:          "both subset fields subtract from prompt independently",
+			raw:           `{"prompt_tokens":9602,"prompt_tokens_details":{"cached_tokens":9570,"cache_write_tokens":14}}`,
+			prompt:        18,
+			cacheRead:     9570,
+			cacheCreation: 14,
+		},
+		{
+			name:          "cache_write_tokens clamped to post-read remainder",
+			raw:           `{"prompt_tokens":50,"prompt_tokens_details":{"cached_tokens":40,"cache_write_tokens":30}}`,
+			prompt:        0,
+			cacheRead:     40,
+			cacheCreation: 10,
+		},
+		{
+			name:          "shim creation wins over subset cache_write_tokens",
+			raw:           `{"prompt_tokens":100,"prompt_tokens_details":{"cache_write_tokens":80},"cache_creation_input_tokens":40}`,
+			prompt:        100,
+			cacheCreation: 40,
+		},
+		{
+			name:          "both shims win, subset fields ignored",
+			raw:           `{"prompt_tokens":100,"prompt_tokens_details":{"cached_tokens":80,"cache_write_tokens":10},"cache_read_input_tokens":500,"cache_creation_input_tokens":40}`,
+			prompt:        100,
+			cacheRead:     500,
+			cacheCreation: 40,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
