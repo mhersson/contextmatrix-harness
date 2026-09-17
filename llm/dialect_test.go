@@ -29,7 +29,7 @@ func keys(t *testing.T, b []byte) map[string]json.RawMessage {
 	return m
 }
 
-func TestEncodeRequestOpenRouterUnchanged(t *testing.T) {
+func TestEncodeRequestOpenRouterExtensions(t *testing.T) {
 	b, err := encodeRequest(fullRequest(true), DialectOpenRouter)
 	require.NoError(t, err)
 
@@ -44,6 +44,8 @@ func TestEncodeRequestOpenRouterUnchanged(t *testing.T) {
 
 	_, hasStreamOpts := m["stream_options"]
 	assert.False(t, hasStreamOpts, "openrouter must not emit stream_options")
+
+	assert.JSONEq(t, `{"type":"ephemeral"}`, string(m["cache_control"]), "openrouter must emit cache_control")
 }
 
 func TestEncodeRequestOpenAIOmitsAndTranslates(t *testing.T) {
@@ -51,7 +53,7 @@ func TestEncodeRequestOpenAIOmitsAndTranslates(t *testing.T) {
 	require.NoError(t, err)
 
 	m := keys(t, b)
-	for _, k := range []string{"provider", "models", "usage", "reasoning"} {
+	for _, k := range []string{"provider", "models", "usage", "reasoning", "cache_control"} {
 		_, ok := m[k]
 		assert.False(t, ok, "openai must omit %q", k)
 	}
@@ -93,6 +95,18 @@ func TestEncodeRequestOmitsToolChoiceWhenUnset(t *testing.T) {
 		_, ok := m["tool_choice"]
 		assert.False(t, ok, "dialect %v must omit tool_choice when unset", d)
 	}
+}
+
+func TestEncodeRequestOpenAIDropsPresetCacheControl(t *testing.T) {
+	req := fullRequest(true)
+	req.CacheControl = &CacheControl{Type: "ephemeral"}
+
+	b, err := encodeRequest(req, DialectOpenAI)
+	require.NoError(t, err)
+
+	m := keys(t, b)
+	_, ok := m["cache_control"]
+	assert.False(t, ok, "openai must drop cache_control even when caller pre-sets it")
 }
 
 func TestExtractReasoningEffort(t *testing.T) {

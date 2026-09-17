@@ -84,7 +84,8 @@ type ToolFunction struct {
 	Parameters  json.RawMessage `json:"parameters,omitempty"`
 }
 
-// Request is the /chat/completions body. Provider/Models are OpenRouter extras.
+// Request is the /chat/completions body. Provider, Models, and cache_control are
+// OpenRouter-only extensions.
 type Request struct {
 	Model    string    `json:"model,omitempty"`
 	Models   []string  `json:"models,omitempty"`
@@ -93,15 +94,22 @@ type Request struct {
 	// ToolChoice is the OpenAI-compatible tool_choice value: a JSON string
 	// ("auto", "required") or a {"type":"function","function":{"name":...}}
 	// object. Raw so callers control the exact wire shape; omitted when nil.
-	ToolChoice json.RawMessage `json:"tool_choice,omitempty"`
-	Stream     bool            `json:"stream,omitempty"`
-	Provider   json.RawMessage `json:"provider,omitempty"`
-	Reasoning  json.RawMessage `json:"reasoning,omitempty"`
-	Usage      *UsageOpt       `json:"usage,omitempty"`
+	ToolChoice   json.RawMessage `json:"tool_choice,omitempty"`
+	Stream       bool            `json:"stream,omitempty"`
+	Provider     json.RawMessage `json:"provider,omitempty"`
+	Reasoning    json.RawMessage `json:"reasoning,omitempty"`
+	Usage        *UsageOpt       `json:"usage,omitempty"`
+	CacheControl *CacheControl   `json:"cache_control,omitempty"`
 	// openai dialect only; populated by encodeRequest, never by callers. Slated to
 	// move to a private wire struct in the next major version.
 	ReasoningEffort string         `json:"reasoning_effort,omitempty"`
 	StreamOptions   *streamOptions `json:"stream_options,omitempty"`
+}
+
+// CacheControl is the prompt-caching marker (OpenRouter-only extension;
+// populated by encodeRequest, never by callers). The Type is always "ephemeral".
+type CacheControl struct {
+	Type string `json:"type"`
 }
 
 // UsageOpt opts into OpenRouter usage accounting (token counts + the
