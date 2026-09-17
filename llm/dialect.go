@@ -4,7 +4,8 @@ import "encoding/json"
 
 // Dialect selects the wire format the client speaks. Both dialects target the
 // OpenAI-compatible /chat/completions shape; they differ only in a few
-// extension fields one provider adds and another does not.
+// extension fields one provider adds and another does not (DialectOpenRouter
+// adds the cache_control prompt-caching marker on every request).
 type Dialect int
 
 const (
@@ -22,19 +23,21 @@ type streamOptions struct {
 }
 
 // encodeRequest renders req to the wire bytes for the given dialect.
-// DialectOpenRouter marshals Request verbatim (byte-identical to the prior wire
-// form). DialectOpenAI strips the OpenRouter-only extension fields (provider,
-// models, usage, the reasoning object) and renders reasoning + streamed-usage in
-// OpenAI-native form. Both paths marshal the SAME struct, so a future Request
-// field reaches both dialects unless explicitly stripped here.
+// DialectOpenRouter marshals Request with the cache_control prompt-caching marker
+// added. DialectOpenAI strips the OpenRouter-only extension fields (provider,
+// models, usage, the reasoning object, cache_control) and renders reasoning +
+// streamed-usage in OpenAI-native form. Both paths marshal the SAME struct, so a
+// future Request field reaches both dialects unless explicitly stripped here.
 func encodeRequest(req Request, d Dialect) ([]byte, error) {
 	if d == DialectOpenAI {
 		req.ReasoningEffort = extractReasoningEffort(req.Reasoning)
 
-		req.Provider, req.Models, req.Reasoning, req.Usage = nil, nil, nil, nil
+		req.Provider, req.Models, req.Reasoning, req.Usage, req.CacheControl = nil, nil, nil, nil, nil
 		if req.Stream {
 			req.StreamOptions = &streamOptions{IncludeUsage: true}
 		}
+	} else {
+		req.CacheControl = &CacheControl{Type: "ephemeral"}
 	}
 
 	return json.Marshal(req)

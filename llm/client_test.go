@@ -41,10 +41,16 @@ func TestClientSendStream(t *testing.T) {
 	assert.Contains(t, gotBody, `"model":"m"`)
 	assert.Contains(t, gotBody, `"name":"read"`)
 	assert.Contains(t, gotBody, `"usage":{"include":true}`)
+	assert.Contains(t, gotBody, `"cache_control":{"type":"ephemeral"}`)
 }
 
 func TestClientSendNonStream(t *testing.T) {
+	var gotBody string
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+
 		io.WriteString(w, `{"model":"m","usage":{"cost":0.001},"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"done"}}]}`) //nolint:errcheck
 	}))
 	defer srv.Close()
@@ -54,6 +60,7 @@ func TestClientSendNonStream(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "done", resp.Content)
 	assert.Equal(t, "stop", resp.FinishReason)
+	assert.Contains(t, gotBody, `"cache_control":{"type":"ephemeral"}`)
 }
 
 func TestSendCapturesReasoning(t *testing.T) {
@@ -92,7 +99,7 @@ func TestClientSendStreamOpenAIDialect(t *testing.T) {
 	require.NoError(t, err)
 
 	m := keys(t, gotBody)
-	for _, k := range []string{"provider", "models", "usage"} {
+	for _, k := range []string{"provider", "models", "usage", "cache_control"} {
 		_, ok := m[k]
 		assert.False(t, ok, "openai dialect must omit %q from the wire", k)
 	}
