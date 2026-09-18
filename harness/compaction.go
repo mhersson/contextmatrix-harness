@@ -35,11 +35,14 @@ func effectiveCompactionThreshold(window int, threshold float64) int {
 }
 
 // compact summarizes msgs[firstNonSystem : len-keepRecent] into one synthetic
-// message, keeping the system message and the last keepRecent messages verbatim.
-// Returns an error when there is not enough context to summarize meaningfully, or
-// when the summarize call fails. The returned Usage is the cost/token accounting
-// for the summarize call itself (zero value on any error path) - callers must
-// fold it into their running totals since it is a real billable request.
+// user message (the first message after the system prompt must be a user turn
+// for Anthropic-shaped endpoints, and the snapped boundary makes the retained
+// tail start with an assistant turn in the common case), keeping the system
+// message and the last keepRecent messages verbatim. Returns an error when
+// there is not enough context to summarize meaningfully, or when the summarize
+// call fails. The returned Usage is the cost/token accounting for the summarize
+// call itself (zero value on any error path) - callers must fold it into their
+// running totals since it is a real billable request.
 func compact(ctx context.Context, client llm.LLM, cfg Config, msgs []llm.Message, keepRecent int, emit *events.Emitter) ([]llm.Message, llm.Usage, error) {
 	if keepRecent < 0 {
 		keepRecent = 0
@@ -90,7 +93,7 @@ func compact(ctx context.Context, client llm.LLM, cfg Config, msgs []llm.Message
 
 	out := make([]llm.Message, 0, sysCount+1+len(msgs)-b)
 	out = append(out, msgs[:sysCount]...)
-	out = append(out, llm.Message{Role: "system", Content: "[Earlier conversation, summarized]\n" + resp.Content})
+	out = append(out, llm.Message{Role: "user", Content: "[Earlier conversation, summarized]\n" + resp.Content})
 	out = append(out, msgs[b:]...)
 
 	emit.Emit(events.StateChange, map[string]any{

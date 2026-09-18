@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/mhersson/contextmatrix-harness/events"
@@ -199,10 +200,40 @@ func TestCompactForwardsImagePrefixThenDropsIt(t *testing.T) {
 	// images do not persist past compaction. Result: system + summary + 1 kept.
 	require.Len(t, out, 3)
 	assert.Equal(t, "SYS", out[0].Content)
+	assert.Equal(t, "user", out[1].Role)
 	assert.Contains(t, out[1].Content, "[Earlier conversation, summarized]")
+	assertFirstNonSystemIsUser(t, out)
 	assert.Equal(t, "recent", out[2].Content)
 
 	assert.Empty(t, out[1].ContentParts, "summary message must not carry image parts")
+}
+
+// assertFirstNonSystemIsUser skips leading system messages and requires the
+// next message's Role to be "user". It reports the full role sequence on
+// failure (e.g. [system system assistant tool tool tool]).
+func assertFirstNonSystemIsUser(t *testing.T, msgs []llm.Message) {
+	t.Helper()
+
+	var roles []string
+
+	for _, m := range msgs {
+		roles = append(roles, m.Role)
+	}
+
+	var firstNonSystem int
+
+	for i, r := range roles {
+		if r != "system" {
+			firstNonSystem = i
+
+			break
+		}
+	}
+
+	if !assert.Equal(t, "user", roles[firstNonSystem],
+		"first non-system message role must be user; got roles %v", roles) {
+		t.FailNow()
+	}
 }
 
 // assertWellPaired verifies that msgs contains no broken tool-call / tool-result
@@ -306,6 +337,7 @@ func TestCompactPreservesToolGroups(t *testing.T) {
 			out, _, err := compact(context.Background(), capt, Config{Model: "m"}, tt.msgs, tt.keepRecent, newEmitter())
 			require.NoError(t, err)
 
+			assertFirstNonSystemIsUser(t, out)
 			assertWellPaired(t, out)
 
 			// The older slice sent to the summarizer must not end with an assistant
@@ -337,8 +369,99 @@ func TestCompactKeepsRecentImageVerbatim(t *testing.T) {
 	out, _, err := compact(context.Background(), &capturingLLM{}, Config{Model: "m"}, msgs, 1, newEmitter())
 	require.NoError(t, err)
 
+	assertFirstNonSystemIsUser(t, out)
+	assert.Equal(t, "user", out[1].Role)
+
 	last := out[len(out)-1]
 	require.Len(t, last.ContentParts, 2)
 	require.NotNil(t, last.ContentParts[1].ImageURL)
 	assert.Equal(t, "data:image/png;base64,BBBB", last.ContentParts[1].ImageURL.URL)
+}
+
+// snapBoundary replicates the compact boundary snap logic to determine which
+// messages will be retained (msgs[b:]). It is used by TestCompactTailStartsWithUser
+// to compute expected retained tails without calling compact itself.
+func snapBoundary(msgs []llm.Message, keepRecent int) int {
+	sysCount := 0
+	if len(msgs) > 0 && msgs[0].Role == "system" {
+		sysCount = 1
+	}
+
+	b := len(msgs) - keepRecent
+	// Step 1: if b lands inside a run of "tool" results, walk back to the
+	// assistant that issued them.
+	for b > sysCount && b < len(msgs) && msgs[b].Role == "tool" {
+		b--
+	}
+	// Step 2: if older would still end with an assistant that has unanswered
+	// tool_calls, pull that assistant into kept-recent.
+	if b > sysCount && msgs[b-1].Role == "assistant" && len(msgs[b-1].ToolCalls) > 0 {
+		b--
+	}
+
+	return b
+}
+
+// TestCompactTailStartsWithUser verifies that the first non-system message
+// after compaction is a user message, satisfying the Anthropic-shaped endpoint
+// requirement that messages[0].role must be user.
+func TestCompactTailStartsWithUser(t *testing.T) {
+	t.Helper()
+
+	toolCalls := []llm.ToolCall{
+		{ID: "call-X", Type: "function", Function: llm.FunctionCall{Name: "foo", Arguments: "{}"}},
+		{ID: "call-Y", Type: "function", Function: llm.FunctionCall{Name: "bar", Arguments: "{}"}},
+		{ID: "call-Z", Type: "function", Function: llm.FunctionCall{Name: "baz", Arguments: "{}"}},
+	}
+
+	base := []llm.Message{
+		{Role: "system", Content: "SYS"},
+		{Role: "user", Content: "u1"},
+		{Role: "assistant", Content: "a1"},
+		{Role: "user", Content: "u2"},
+		{Role: "assistant", ToolCalls: toolCalls},
+		{Role: "tool", ToolCallID: "call-X", Content: "result-X"},
+		{Role: "tool", ToolCallID: "call-Y", Content: "result-Y"},
+		{Role: "tool", ToolCallID: "call-Z", Content: "result-Z"},
+	}
+
+	withTrailing := append(append([]llm.Message(nil), base...), llm.Message{Role: "user", Content: "u3"})
+
+	tests := []struct {
+		name       string
+		msgs       []llm.Message
+		keepRecent int
+	}{
+		{name: "base_keepRecent_1", msgs: base, keepRecent: 1},
+		{name: "base_keepRecent_2", msgs: base, keepRecent: 2},
+		{name: "base_keepRecent_3", msgs: base, keepRecent: 3},
+		{name: "base_keepRecent_4", msgs: base, keepRecent: 4},
+		{name: "withTrailing_keepRecent_1", msgs: withTrailing, keepRecent: 1},
+		{name: "withTrailing_keepRecent_2", msgs: withTrailing, keepRecent: 2},
+		{name: "withTrailing_keepRecent_3", msgs: withTrailing, keepRecent: 3},
+		{name: "withTrailing_keepRecent_4", msgs: withTrailing, keepRecent: 4},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			capt := &capturingLLM{}
+
+			out, _, err := compact(context.Background(), capt, Config{Model: "m"}, tt.msgs, tt.keepRecent, newEmitter())
+			require.NoError(t, err)
+
+			require.Equal(t, "system", out[0].Role, "first output message must be the system prompt")
+			require.Equal(t, "user", out[1].Role, "summary message must have role 'user'")
+			require.True(t, strings.HasPrefix(out[1].Content, "[Earlier conversation, summarized]"),
+				"summary message content must start with '[Earlier conversation, summarized]'")
+
+			assertFirstNonSystemIsUser(t, out)
+			assertWellPaired(t, out)
+
+			// The retained tail (out[2:]) must equal msgs[b:] where b is the
+			// snapped boundary - the tool group is never split.
+			b := snapBoundary(tt.msgs, tt.keepRecent)
+			expectedTail := tt.msgs[b:]
+			assert.Equal(t, expectedTail, out[2:], "retained tail must match snapped boundary result")
+		})
+	}
 }
