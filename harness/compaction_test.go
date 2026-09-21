@@ -214,26 +214,18 @@ func TestCompactForwardsImagePrefixThenDropsIt(t *testing.T) {
 func assertFirstNonSystemIsUser(t *testing.T, msgs []llm.Message) {
 	t.Helper()
 
-	var roles []string
+	roles := make([]string, 0, len(msgs))
+	first := ""
 
 	for _, m := range msgs {
 		roles = append(roles, m.Role)
-	}
 
-	var firstNonSystem int
-
-	for i, r := range roles {
-		if r != "system" {
-			firstNonSystem = i
-
-			break
+		if first == "" && m.Role != "system" {
+			first = m.Role
 		}
 	}
 
-	if !assert.Equal(t, "user", roles[firstNonSystem],
-		"first non-system message role must be user; got roles %v", roles) {
-		t.FailNow()
-	}
+	require.Equal(t, "user", first, "first non-system message role must be user; got roles %v", roles)
 }
 
 // assertWellPaired verifies that msgs contains no broken tool-call / tool-result
@@ -378,36 +370,10 @@ func TestCompactKeepsRecentImageVerbatim(t *testing.T) {
 	assert.Equal(t, "data:image/png;base64,BBBB", last.ContentParts[1].ImageURL.URL)
 }
 
-// snapBoundary replicates the compact boundary snap logic to determine which
-// messages will be retained (msgs[b:]). It is used by TestCompactTailStartsWithUser
-// to compute expected retained tails without calling compact itself.
-func snapBoundary(msgs []llm.Message, keepRecent int) int {
-	sysCount := 0
-	if len(msgs) > 0 && msgs[0].Role == "system" {
-		sysCount = 1
-	}
-
-	b := len(msgs) - keepRecent
-	// Step 1: if b lands inside a run of "tool" results, walk back to the
-	// assistant that issued them.
-	for b > sysCount && b < len(msgs) && msgs[b].Role == "tool" {
-		b--
-	}
-	// Step 2: if older would still end with an assistant that has unanswered
-	// tool_calls, pull that assistant into kept-recent.
-	if b > sysCount && msgs[b-1].Role == "assistant" && len(msgs[b-1].ToolCalls) > 0 {
-		b--
-	}
-
-	return b
-}
-
 // TestCompactTailStartsWithUser verifies that the first non-system message
 // after compaction is a user message, satisfying the Anthropic-shaped endpoint
 // requirement that messages[0].role must be user.
 func TestCompactTailStartsWithUser(t *testing.T) {
-	t.Helper()
-
 	toolCalls := []llm.ToolCall{
 		{ID: "call-X", Type: "function", Function: llm.FunctionCall{Name: "foo", Arguments: "{}"}},
 		{ID: "call-Y", Type: "function", Function: llm.FunctionCall{Name: "bar", Arguments: "{}"}},
@@ -427,19 +393,23 @@ func TestCompactTailStartsWithUser(t *testing.T) {
 
 	withTrailing := append(append([]llm.Message(nil), base...), llm.Message{Role: "user", Content: "u3"})
 
+	// tailStart is the index in msgs where the retained tail begins. Every
+	// keepRecent that lands inside the tool group snaps back to the assistant
+	// that issued it (index 4); only a trailing user message is kept alone.
 	tests := []struct {
 		name       string
 		msgs       []llm.Message
 		keepRecent int
+		tailStart  int
 	}{
-		{name: "base_keepRecent_1", msgs: base, keepRecent: 1},
-		{name: "base_keepRecent_2", msgs: base, keepRecent: 2},
-		{name: "base_keepRecent_3", msgs: base, keepRecent: 3},
-		{name: "base_keepRecent_4", msgs: base, keepRecent: 4},
-		{name: "withTrailing_keepRecent_1", msgs: withTrailing, keepRecent: 1},
-		{name: "withTrailing_keepRecent_2", msgs: withTrailing, keepRecent: 2},
-		{name: "withTrailing_keepRecent_3", msgs: withTrailing, keepRecent: 3},
-		{name: "withTrailing_keepRecent_4", msgs: withTrailing, keepRecent: 4},
+		{name: "base_keepRecent_1", msgs: base, keepRecent: 1, tailStart: 4},
+		{name: "base_keepRecent_2", msgs: base, keepRecent: 2, tailStart: 4},
+		{name: "base_keepRecent_3", msgs: base, keepRecent: 3, tailStart: 4},
+		{name: "base_keepRecent_4", msgs: base, keepRecent: 4, tailStart: 4},
+		{name: "withTrailing_keepRecent_1", msgs: withTrailing, keepRecent: 1, tailStart: 8},
+		{name: "withTrailing_keepRecent_2", msgs: withTrailing, keepRecent: 2, tailStart: 4},
+		{name: "withTrailing_keepRecent_3", msgs: withTrailing, keepRecent: 3, tailStart: 4},
+		{name: "withTrailing_keepRecent_4", msgs: withTrailing, keepRecent: 4, tailStart: 4},
 	}
 
 	for _, tt := range tests {
@@ -457,11 +427,7 @@ func TestCompactTailStartsWithUser(t *testing.T) {
 			assertFirstNonSystemIsUser(t, out)
 			assertWellPaired(t, out)
 
-			// The retained tail (out[2:]) must equal msgs[b:] where b is the
-			// snapped boundary - the tool group is never split.
-			b := snapBoundary(tt.msgs, tt.keepRecent)
-			expectedTail := tt.msgs[b:]
-			assert.Equal(t, expectedTail, out[2:], "retained tail must match snapped boundary result")
+			assert.Equal(t, tt.msgs[tt.tailStart:], out[2:], "retained tail must be kept verbatim with the tool group intact")
 		})
 	}
 }
