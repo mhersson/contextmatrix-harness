@@ -14,10 +14,10 @@ import (
 )
 
 func TestRetryRecoversAfter429HonoringRetryAfter(t *testing.T) {
-	var calls int32
+	var calls atomic.Int32
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if atomic.AddInt32(&calls, 1) < 3 {
+		if calls.Add(1) < 3 {
 			w.Header().Set("Retry-After", "2")
 			w.WriteHeader(http.StatusTooManyRequests)
 			io.WriteString(w, `{"error":{"message":"rate limited"}}`) //nolint:errcheck
@@ -43,17 +43,17 @@ func TestRetryRecoversAfter429HonoringRetryAfter(t *testing.T) {
 	resp, err := c.SendStream(context.Background(), Request{Messages: []Message{{Role: "user", Content: "x"}}}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "ok", resp.Content)
-	assert.Equal(t, int32(3), atomic.LoadInt32(&calls))
+	assert.Equal(t, int32(3), calls.Load())
 	require.Len(t, delays, 2)
 	assert.Equal(t, 2*time.Second, delays[0])
 	assert.Equal(t, 2*time.Second, delays[1])
 }
 
 func TestRetryExponentialBackoffWithoutRetryAfter(t *testing.T) {
-	var calls int32
+	var calls atomic.Int32
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&calls, 1)
+		calls.Add(1)
 		w.WriteHeader(http.StatusInternalServerError)
 		io.WriteString(w, "boom") //nolint:errcheck
 	}))
@@ -72,15 +72,15 @@ func TestRetryExponentialBackoffWithoutRetryAfter(t *testing.T) {
 	_, err := c.Send(context.Background(), Request{Messages: []Message{{Role: "user"}}})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "500")
-	assert.Equal(t, int32(4), atomic.LoadInt32(&calls)) // 1 + 3 retries
+	assert.Equal(t, int32(4), calls.Load()) // 1 + 3 retries
 	assert.Equal(t, []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}, delays)
 }
 
 func TestNoRetryByDefault(t *testing.T) {
-	var calls int32
+	var calls atomic.Int32
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&calls, 1)
+		calls.Add(1)
 		w.WriteHeader(http.StatusTooManyRequests)
 		io.WriteString(w, "rate limited") //nolint:errcheck
 	}))
@@ -89,5 +89,5 @@ func TestNoRetryByDefault(t *testing.T) {
 	c := NewClient("k", WithBaseURL(srv.URL)) // default: no retry
 	_, err := c.SendStream(context.Background(), Request{Messages: []Message{{Role: "user"}}}, nil)
 	require.Error(t, err)
-	assert.Equal(t, int32(1), atomic.LoadInt32(&calls))
+	assert.Equal(t, int32(1), calls.Load())
 }

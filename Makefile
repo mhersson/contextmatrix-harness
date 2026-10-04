@@ -1,7 +1,7 @@
 .PHONY: build test test-race fmt lint deps-gate
 
 # Kept in sync with contextmatrix-agent so CI installs the same linter release.
-GOLANGCI_LINT_VERSION ?= v2.12.2
+GOLANGCI_LINT_VERSION ?= v2.14.0
 
 build:
 	go build ./...

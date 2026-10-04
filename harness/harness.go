@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 
 	"github.com/mhersson/contextmatrix-harness/events"
@@ -829,9 +830,7 @@ func skipToolCall(emit *events.Emitter, tc llm.ToolCall, resultContent string, e
 	emit.Emit(events.ToolCallKind, map[string]any{"id": tc.ID, "name": tc.Function.Name, "dispatched": false})
 
 	data := map[string]any{"id": tc.ID, "skipped": true}
-	for k, v := range extra {
-		data[k] = v
-	}
+	maps.Copy(data, extra)
 
 	emit.Emit(events.ToolResult, data)
 
