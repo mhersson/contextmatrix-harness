@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"sync"
 	"time"
 )
@@ -63,9 +64,7 @@ func WithEnvelopeFields(fields map[string]any) Option {
 			e.static = make(map[string]any, len(fields))
 		}
 
-		for k, v := range fields {
-			e.static[k] = v
-		}
+		maps.Copy(e.static, fields)
 	}
 }
 
@@ -134,9 +133,7 @@ func (e *Emitter) envelope(ev Event) any {
 	}
 
 	m := make(map[string]any, len(e.static)+4)
-	for k, v := range e.static {
-		m[k] = v
-	}
+	maps.Copy(m, e.static)
 
 	m["seq"] = ev.Seq
 	m["kind"] = ev.Kind
