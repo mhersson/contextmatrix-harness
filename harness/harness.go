@@ -74,7 +74,9 @@ type Config struct {
 	Interactive        bool                // true = unbounded turns; incapable/transport errors await next input instead of terminating (requires Inbox)
 	// OnDelta receives each streamed content or reasoning fragment as it
 	// arrives, synchronously on the Run goroutine, so a caller can surface
-	// progress during a long turn. nil = no callback.
+	// progress during a long turn. nil = no callback. Fragments are raw model
+	// output: RedactToolOutput is not applied and a secret can span fragments,
+	// so a caller that persists or prints them must redact them itself.
 	OnDelta func(llm.Delta)
 	// WrapUpTurns, when > 0, injects WrapUpMessage as a synthetic user message
 	// exactly once, at the top of the turn whose start leaves WrapUpTurns turns
