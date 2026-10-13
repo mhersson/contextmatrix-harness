@@ -110,9 +110,9 @@ func TestParseStreamReasoningContent(t *testing.T) {
 			"Let me.",
 		},
 		{
-			"both fields count once per frame",
-			`data: {"choices":[{"delta":{"reasoning":"a","reasoning_content":"a"}}]}` + "\n" +
-				`data: {"choices":[{"delta":{"reasoning":"b","reasoning_content":"b"}}]}` + "\n" +
+			"both fields: reasoning wins, counted once per frame",
+			`data: {"choices":[{"delta":{"reasoning":"a","reasoning_content":"X"}}]}` + "\n" +
+				`data: {"choices":[{"delta":{"reasoning":"b","reasoning_content":"Y"}}]}` + "\n" +
 				`data: {"choices":[{"delta":{},"finish_reason":"stop"}]}` + "\n",
 			"ab",
 		},
