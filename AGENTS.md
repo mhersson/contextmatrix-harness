@@ -34,14 +34,26 @@ Orchestration, protocol, transport, and policy belong in the consuming backends
 - Tests sit next to code (`bash.go` → `bash_test.go`), table-driven, `t.TempDir()`,
   `t.Helper()` in helpers. `testify/require` for fatal checks, `testify/assert`
   otherwise.
+- Tests must exercise behavior. A test that only fails when someone rewords a
+  string, renames a heading, or edits prose is not a test - do not write it, and
+  delete it when found. Asserting exact text is legitimate only where the text is
+  a wire contract a consumer parses; if no code reads it, no test should pin it.
 - Lint is strict (`wsl_v5`, `nlreturn`, `gosec`, `revive`, …) and `make lint` is
   the authority: blank line before `return`, no naked returns past 5 lines.
+
+## Documentation
+
+- Documentation must always be true: every statement matches the code at
+  HEAD, and a change that makes a doc line false updates it in the same
+  commit.
+- Document the current state - what exists now and why, not how it got here.
 - Comments explain only non-obvious decisions, constraints, safety invariants,
   or workarounds. Do not narrate what code does or record change history; git
   holds history. Keep comments to one or two tight lines unless a longer
   explanation is genuinely necessary. Rewrite or delete if you find comments
   that don't follow this rule.
 - Never use em-dashes; use hyphens (-).
+- Never reference plan phases, task numbers, or private card IDs in doc comments.
 
 ## Key domain rules
 
@@ -83,7 +95,9 @@ make build       # must build
 
 Fix any failure before proceeding. Never commit red.
 
-**NEVER** commit without explicit approval from the user. No exceptions.
+- **Never commit to `main`.** Work on a feature branch; tasks of a plan or
+  scope the user approved commit there without asking again. Never push
+  without explicit user approval.
 
 **NEVER** reference a plan phase or task number in a commit message.
 
