@@ -23,7 +23,7 @@ Orchestration, protocol, transport, and policy belong in the consuming backends
 
 ## Coding conventions
 
-- **Go 1.26+.** Format with `make fmt` (gofumpt); imports via goimports.
+- **Go 1.27+.** Format with `make fmt` (gofumpt); imports via goimports.
 - Wrap errors with `fmt.Errorf("operation: %w", err)`. Never swallow an error.
 - `context.Context` is the first parameter of every function that does I/O.
 - No global state, no `init()`. Dependencies are struct fields wired by the caller.
