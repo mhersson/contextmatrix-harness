@@ -50,7 +50,9 @@ type Compaction struct {
 	// when fewer than reservedHeadroomTokens tokens remain.
 	Threshold float64
 	// KeepRecentTurns is the number of messages (from the end of the history)
-	// to preserve verbatim after compaction. The older prefix is summarized.
+	// to preserve verbatim after compaction. Despite the name it counts
+	// messages, not turns: one tool-using turn is an assistant message plus one
+	// message per tool call. The older prefix is summarized.
 	KeepRecentTurns int
 }
 
