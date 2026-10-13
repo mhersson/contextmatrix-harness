@@ -47,7 +47,7 @@ func TestSpawnSubagentsParallelReadOnly(t *testing.T) {
 		{Role: "reader-b", Prompt: "summarize f.txt"},
 	}
 	results, err := SpawnSubagents(context.Background(), scripted, root, newEmitter(), specs,
-		SubagentOpts{Depth: 0, MaxDepth: 2, DefaultModel: "test/model"})
+		SubagentOpts{DefaultModel: "test/model"})
 	require.NoError(t, err)
 	require.Len(t, results, 2)
 	assert.Equal(t, "reader-a", results[0].Role)
@@ -60,13 +60,6 @@ func TestSpawnSubagentsParallelReadOnly(t *testing.T) {
 	}
 }
 
-func TestSpawnSubagentsDepthCap(t *testing.T) {
-	_, err := SpawnSubagents(context.Background(), &scriptedLLM{}, t.TempDir(), newEmitter(),
-		[]SubagentSpec{{Role: "x", Prompt: "y"}},
-		SubagentOpts{Depth: 2, MaxDepth: 2, DefaultModel: "m"})
-	require.Error(t, err)
-}
-
 func TestSpawnSubagentsChildrenAreReadOnly(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(root, "f.txt"), []byte("orig"), 0o644))
@@ -74,7 +67,7 @@ func TestSpawnSubagentsChildrenAreReadOnly(t *testing.T) {
 	scripted := &scriptedLLM{tool: "edit", args: `{"path":"f.txt","old_string":"orig","new_string":"hacked"}`, final: "tried"}
 	results, err := SpawnSubagents(context.Background(), scripted, root, newEmitter(),
 		[]SubagentSpec{{Role: "writer", Prompt: "edit it"}},
-		SubagentOpts{MaxDepth: 2, DefaultModel: "m"})
+		SubagentOpts{DefaultModel: "m"})
 	require.NoError(t, err)
 	assert.Equal(t, 1, results[0].Result.ToolCallFailures) // "edit" is unknown in a read-only registry
 
@@ -133,7 +126,6 @@ func TestSpawnSubagentsRedactPropagates(t *testing.T) {
 	_, err := SpawnSubagents(context.Background(), capt, root, newEmitter(),
 		[]SubagentSpec{{Role: "reviewer", Prompt: "read the secret file"}},
 		SubagentOpts{
-			MaxDepth:         2,
 			DefaultModel:     "test/model",
 			RedactToolOutput: redact,
 		},
@@ -182,7 +174,6 @@ func TestSpawnSubagentsToolOutputCapPropagates(t *testing.T) {
 	_, err := SpawnSubagents(context.Background(), capt, root, newEmitter(),
 		[]SubagentSpec{{Role: "reviewer", Prompt: "read the big file"}},
 		SubagentOpts{
-			MaxDepth:           2,
 			DefaultModel:       "test/model",
 			ToolOutputMaxBytes: maxBytes,
 		},
@@ -227,7 +218,6 @@ func TestSpawnSubagentsPropagatesProvider(t *testing.T) {
 	_, err := SpawnSubagents(context.Background(), capt, root, newEmitter(),
 		[]SubagentSpec{{Role: "reviewer", Prompt: "read f.txt"}},
 		SubagentOpts{
-			MaxDepth:     2,
 			DefaultModel: "test/model",
 			Provider:     json.RawMessage(`{"order":["x"]}`),
 			Reasoning:    json.RawMessage(`{"effort":"high"}`),
@@ -302,7 +292,7 @@ func TestSpawnSubagentsWrapUpNudgePropagates(t *testing.T) {
 	}
 
 	results, err := SpawnSubagents(context.Background(), w, root, newEmitter(), specs,
-		SubagentOpts{MaxDepth: 2, DefaultModel: "test/model"})
+		SubagentOpts{DefaultModel: "test/model"})
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	require.Len(t, w.requests, 6)
@@ -324,7 +314,7 @@ func TestSpawnSubagentsWrapUpNudgeOffByDefault(t *testing.T) {
 	specs := []SubagentSpec{{Role: "worker", Prompt: "task", MaxTurns: 4}}
 
 	_, err := SpawnSubagents(context.Background(), w, root, newEmitter(), specs,
-		SubagentOpts{MaxDepth: 2, DefaultModel: "test/model"})
+		SubagentOpts{DefaultModel: "test/model"})
 	require.NoError(t, err)
 	require.Len(t, w.requests, 4)
 
