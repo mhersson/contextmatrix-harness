@@ -15,9 +15,9 @@ Orchestration, protocol, transport, and policy belong in the consuming backends
 - The module has **zero external module dependencies** in non-test code
   (`testify` is the only test dependency).
 - CI (`make deps-gate`, `scripts/deps-gate.sh`) enforces the `harness` import
-  allowlist and rejects any contextmatrix-* module dependency; keeping other
-  external dependencies out is a review-enforced convention. An import that
-  trips the gate means fix the design, not the gate.
+  allowlist and rejects every external module dependency in non-test code;
+  `testify` stays allowed because test imports are outside the graph. An import
+  that trips the gate means fix the design, not the gate.
 - tlsca is the one non-loop package: a pure-stdlib leaf utility (extra-CA HTTP
   trust) shared by the backends. It imports stdlib only.
 

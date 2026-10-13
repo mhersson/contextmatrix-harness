@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 # Enforces the harness boundary invariant:
 #   1. the `harness` package imports only events/llm/tools (+ stdlib + itself)
-#   2. the module as a whole depends on no contextmatrix-* module
+#   2. non-test code depends on no module outside this one and the stdlib
+# A failing `go list` fails the gate; it never passes vacuously.
 set -euo pipefail
 
 mod="github.com/mhersson/contextmatrix-harness"
 
-bad_harness=$(go list -deps ./harness \
+# Standalone assignments so set -e aborts when go list itself fails.
+harness_deps=$(go list -deps ./harness)
+bad_harness=$(printf '%s\n' "${harness_deps}" \
   | grep "^${mod}/" \
   | grep -vE "/(events|llm|tools|harness)$" || true)
 if [ -n "${bad_harness}" ]; then
@@ -15,10 +18,12 @@ if [ -n "${bad_harness}" ]; then
   exit 1
 fi
 
-bad_ext=$(go list -deps ./... \
-  | grep -E 'mhersson/contextmatrix-(agent|runner|protocol|githubauth|chat)' || true)
+all_deps=$(go list -deps -f '{{if not .Standard}}{{.ImportPath}}{{end}}' ./...)
+bad_ext=$(printf '%s\n' "${all_deps}" \
+  | grep -v '^$' \
+  | grep -vE "^${mod}(/|$)" || true)
 if [ -n "${bad_ext}" ]; then
-  echo "FAIL: forbidden contextmatrix-* dependency:" >&2
+  echo "FAIL: external module dependency in non-test code:" >&2
   echo "${bad_ext}" >&2
   exit 1
 fi
