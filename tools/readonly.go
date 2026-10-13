@@ -11,8 +11,3 @@ func ReadOnlyTools(root string) []Tool {
 		NewGitTool(root),
 	}
 }
-
-// NewReadOnlyRegistry builds a Registry containing only ReadOnlyTools(root).
-func NewReadOnlyRegistry(root string) *Registry {
-	return NewRegistry(ReadOnlyTools(root)...)
-}
