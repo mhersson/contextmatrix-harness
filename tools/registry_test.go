@@ -45,6 +45,21 @@ func TestResolveInRootRejectsEscape(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestResolveInRootRejectsSiblingPrefixDir(t *testing.T) {
+	root := t.TempDir()
+	siblingName := filepath.Base(root) + "-sibling"
+	sibling := filepath.Join(filepath.Dir(root), siblingName)
+	require.NoError(t, os.MkdirAll(sibling, 0o755))
+	t.Cleanup(func() { _ = os.RemoveAll(sibling) })
+	require.NoError(t, os.WriteFile(filepath.Join(sibling, "f"), []byte("x"), 0o600))
+
+	// A directory whose name merely starts with the root's name is outside it.
+	for _, rel := range []string{"../" + siblingName + "/f", "../" + siblingName + "/missing"} {
+		_, err := resolveInRoot(root, rel)
+		require.Error(t, err, rel)
+	}
+}
+
 func TestResolveInRootRejectsSymlinkEscape(t *testing.T) {
 	root := t.TempDir()
 	outside := t.TempDir()
