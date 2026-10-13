@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -112,9 +111,7 @@ func TestExtraReadRootsPerTool(t *testing.T) {
 	for _, tc := range tools {
 		t.Run(tc.name+" in an extra read root", func(t *testing.T) {
 			if tc.needsRg {
-				if _, err := exec.LookPath("rg"); err != nil {
-					t.Skip("ripgrep (rg) not installed")
-				}
+				requireRg(t)
 			}
 
 			target := f.depFile
@@ -135,9 +132,7 @@ func TestExtraReadRootsPerTool(t *testing.T) {
 
 		t.Run(tc.name+" outside every root", func(t *testing.T) {
 			if tc.needsRg {
-				if _, err := exec.LookPath("rg"); err != nil {
-					t.Skip("ripgrep (rg) not installed")
-				}
+				requireRg(t)
 			}
 
 			target := outsideFile

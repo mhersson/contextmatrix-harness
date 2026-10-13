@@ -109,29 +109,30 @@ func (t GlobTool) list(ctx context.Context, pattern, searchPath string) ([]strin
 	return nil, fmt.Errorf("glob requires fd or rg on PATH")
 }
 
-// globViaFd uses fd only for gitignore-aware file enumeration -- no --glob,
-// no --full-path, so there is no glob matching left in fd to disagree with
-// the rg path. "." is a regex matching any filename, so this lists every file
-// under searchPath honoring .gitignore. fd exits 0 even when nothing matches,
-// so any non-zero exit is a real error (not "no matches"). The pattern is
-// applied by the same matcher as globViaRg (see streamEnumeration), so the
-// two backends can only differ in which binary enumerates files, never in how
-// a pattern is interpreted.
+// globViaFd uses fd only for gitignore-aware file enumeration - no --glob, no
+// --full-path, so there is no glob matching left in fd to disagree with the rg
+// path. "." is a regex matching any filename, so this lists every file under
+// searchPath honoring .gitignore, including dotfiles but not .git. fd exits 0
+// even when nothing matches, so any non-zero exit is a real error (not "no
+// matches"). The pattern is applied by the same matcher as globViaRg (see
+// streamEnumeration), so the two backends can only differ in which binary
+// enumerates files, never in how a pattern is interpreted.
 func (t GlobTool) globViaFd(ctx context.Context, bin, pattern, searchPath string) ([]string, error) {
 	patternSegs, err := prepareGlob(pattern)
 	if err != nil {
 		return nil, err
 	}
 
-	cmd := exec.CommandContext(ctx, bin, "--type", "f", "--", ".", searchPath)
+	cmd := exec.CommandContext(ctx, bin, "--type", "f", "--hidden", "--exclude", ".git", "--", ".", searchPath)
 	cmd.Dir = t.root
 	cmd.Env = ScrubbedEnv(nil)
 
 	return t.streamEnumeration(ctx, cmd, patternSegs, "fd enumeration failed", nil)
 }
 
-// globViaRg lists files with `rg --files` (which honors .gitignore - unlike
-// `rg --glob`, which overrides ignore rules) and applies the glob via the
+// globViaRg lists files with `rg --files`, which honors .gitignore (only a
+// whitelist `--glob` overrides ignore rules; the negated `!.git` does not).
+// --hidden lists dotfiles and `!.git` drops .git. The glob is applied by the
 // same streaming filter as globViaFd (see streamEnumeration). rg exits 1 when
 // it finds no files, which ignoreExit below treats as "no matches" rather
 // than an error; exit >= 2 is a real error. "--" before searchPath mirrors
@@ -144,7 +145,7 @@ func (t GlobTool) globViaRg(ctx context.Context, pattern, searchPath string) ([]
 		return nil, err
 	}
 
-	cmd := exec.CommandContext(ctx, "rg", "--files", "--", searchPath)
+	cmd := exec.CommandContext(ctx, "rg", "--files", "--hidden", "--glob", "!.git", "--", searchPath)
 	cmd.Dir = t.root
 	cmd.Env = ScrubbedEnv(nil)
 

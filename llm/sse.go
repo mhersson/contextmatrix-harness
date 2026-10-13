@@ -26,9 +26,10 @@ type streamChoice struct {
 }
 
 type streamDelta struct {
-	Content   string           `json:"content"`
-	Reasoning string           `json:"reasoning"`
-	ToolCalls []streamToolCall `json:"tool_calls"`
+	Content          string           `json:"content"`
+	Reasoning        string           `json:"reasoning"`
+	ReasoningContent string           `json:"reasoning_content"`
+	ToolCalls        []streamToolCall `json:"tool_calls"`
 }
 
 type streamToolCall struct {
@@ -124,11 +125,16 @@ func parseStreamWithLimit(r io.Reader, onDelta func(Delta), maxLine int) (Respon
 				}
 			}
 
-			if d.Reasoning != "" {
-				reasoningBuilder.WriteString(d.Reasoning)
+			reasoning := d.Reasoning
+			if reasoning == "" {
+				reasoning = d.ReasoningContent
+			}
+
+			if reasoning != "" {
+				reasoningBuilder.WriteString(reasoning)
 
 				if onDelta != nil {
-					onDelta(Delta{Reasoning: d.Reasoning})
+					onDelta(Delta{Reasoning: reasoning})
 				}
 			}
 

@@ -50,7 +50,9 @@ type Compaction struct {
 	// when fewer than reservedHeadroomTokens tokens remain.
 	Threshold float64
 	// KeepRecentTurns is the number of messages (from the end of the history)
-	// to preserve verbatim after compaction. The older prefix is summarized.
+	// to preserve verbatim after compaction. Despite the name it counts
+	// messages, not turns: one tool-using turn is an assistant message plus one
+	// message per tool call. The older prefix is summarized.
 	KeepRecentTurns int
 }
 
@@ -70,6 +72,12 @@ type Config struct {
 	History            []llm.Message       // prior conversation to seed before the initial task message; nil = unchanged behavior
 	Compaction         *Compaction         // nil = hard context_limit stop (v1 behavior); non-nil = in-window compaction
 	Interactive        bool                // true = unbounded turns; incapable/transport errors await next input instead of terminating (requires Inbox)
+	// OnDelta receives each streamed content or reasoning fragment as it
+	// arrives, synchronously on the Run goroutine, so a caller can surface
+	// progress during a long turn. nil = no callback. Fragments are raw model
+	// output: RedactToolOutput is not applied and a secret can span fragments,
+	// so a caller that persists or prints them must redact them itself.
+	OnDelta func(llm.Delta)
 	// WrapUpTurns, when > 0, injects WrapUpMessage as a synthetic user message
 	// exactly once, at the top of the turn whose start leaves WrapUpTurns turns
 	// remaining before MaxTurns. It arrives as the freshest message in context -
@@ -288,7 +296,7 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 		}
 		emit.Emit(events.ModelRequest, map[string]any{"turn": res.Turns, "model": cfg.Model, "messages": len(msgs)})
 
-		resp, err := client.SendStream(ctx, req, nil)
+		resp, err := client.SendStream(ctx, req, cfg.OnDelta)
 		if err != nil {
 			// Transport errors embed the provider response body (llm/client.go),
 			// so this emit goes through the same redaction and size cap as every

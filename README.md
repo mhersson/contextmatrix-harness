@@ -26,8 +26,9 @@ This module is consumed by both backends in the ContextMatrix ecosystem:
 
 `harness` imports **only** `events`, `llm`, `tools` (+ stdlib). The module has
 **zero external module dependencies** in non-test code (`testify` is the only
-test dependency). CI enforces the `harness` import allowlist and rejects any
-contextmatrix-* module dependency via `scripts/deps-gate.sh` (`make deps-gate`).
+test dependency). CI enforces the `harness` import allowlist and rejects every
+external module dependency in non-test code via `scripts/deps-gate.sh`
+(`make deps-gate`).
 Keep the loop free of orchestration,
 protocol, transport, and policy concerns - those belong in the consuming backend.
 The harness is likewise language-neutral toward the target workspace: it bakes in

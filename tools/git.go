@@ -71,7 +71,7 @@ func (t GitTool) Execute(ctx context.Context, args map[string]any) (Result, erro
 
 // validateGitArgs rejects write/mutation primitives so the read-only git tool
 // cannot escape the workspace (--output) or change refs (branch create/delete/
-// rename). Keeps the "read-only is structural" contract SpawnSubagents relies on.
+// rename). Keeps the git tool side-effect-free, as ReadOnlyTools requires.
 func validateGitArgs(sub string, args []string) error {
 	for _, a := range args {
 		if a == "-o" || a == "--output" || a == "--output-directory" ||

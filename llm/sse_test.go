@@ -96,6 +96,42 @@ func TestParseStreamBuilderAccumulation(t *testing.T) {
 	assert.JSONEq(t, `{"a":1}`, resp.ToolCalls[0].Function.Arguments)
 }
 
+func TestParseStreamReasoningContent(t *testing.T) {
+	tests := []struct {
+		name string
+		sse  string
+		want string
+	}{
+		{
+			"reasoning_content only",
+			`data: {"choices":[{"delta":{"reasoning_content":"Let "}}]}` + "\n" +
+				`data: {"choices":[{"delta":{"reasoning_content":"me."}}]}` + "\n" +
+				`data: {"choices":[{"delta":{},"finish_reason":"stop"}]}` + "\n",
+			"Let me.",
+		},
+		{
+			"both fields: reasoning wins, counted once per frame",
+			`data: {"choices":[{"delta":{"reasoning":"a","reasoning_content":"X"}}]}` + "\n" +
+				`data: {"choices":[{"delta":{"reasoning":"b","reasoning_content":"Y"}}]}` + "\n" +
+				`data: {"choices":[{"delta":{},"finish_reason":"stop"}]}` + "\n",
+			"ab",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var streamed strings.Builder
+
+			resp, err := parseStream(strings.NewReader(tt.sse), func(d Delta) {
+				streamed.WriteString(d.Reasoning)
+			})
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, resp.Reasoning)
+			assert.Equal(t, tt.want, streamed.String())
+		})
+	}
+}
+
 func TestParseStreamTruncationDetection(t *testing.T) {
 	chunk := `data: {"choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}]}`
 	noFinish := `data: {"choices":[{"delta":{"content":"hi"}}]}`

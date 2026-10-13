@@ -65,7 +65,9 @@ func (t GrepTool) Execute(ctx context.Context, args map[string]any) (Result, err
 		cmdArgs = append(cmdArgs, "--glob", g)
 	}
 
-	cmdArgs = append(cmdArgs, "--", pattern, searchPath)
+	// Hidden files are searched, .git is not; the exclusion comes last so it
+	// wins over a caller glob (later globs take precedence in rg).
+	cmdArgs = append(cmdArgs, "--hidden", "--glob", "!.git", "--", pattern, searchPath)
 
 	cmd := exec.CommandContext(ctx, "rg", cmdArgs...)
 	cmd.Dir = t.root
