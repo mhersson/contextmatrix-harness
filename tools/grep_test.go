@@ -135,14 +135,9 @@ func TestGrepCapsOutputLines(t *testing.T) {
 func TestGrepIncludesHiddenExcludesGit(t *testing.T) {
 	requireRg(t)
 
-	root := t.TempDir()
-	for _, rel := range []string{".github/x.yaml", ".git/x.yaml", "plain.yaml"} {
-		p := filepath.Join(root, rel)
-		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
-		require.NoError(t, os.WriteFile(p, []byte("hiddentoken\n"), 0o644))
-	}
+	root := writeHiddenFixture(t)
 
-	for _, glob := range []string{"", "*.yaml"} {
+	for _, glob := range []string{"", "*.yaml", "*"} {
 		t.Run("glob="+glob, func(t *testing.T) {
 			args := map[string]any{"pattern": "hiddentoken"}
 			if glob != "" {
