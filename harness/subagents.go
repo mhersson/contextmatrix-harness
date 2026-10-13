@@ -29,7 +29,7 @@ type SubagentResult struct {
 	Err    error
 }
 
-// SubagentOpts bounds a fan-out.
+// SubagentOpts configures a fan-out.
 type SubagentOpts struct {
 	DefaultModel       string              // model for specs that don't override
 	ToolOutputMaxBytes int                 // 0 disables the child tool-result size cap
