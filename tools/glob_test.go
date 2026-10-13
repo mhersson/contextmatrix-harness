@@ -614,3 +614,39 @@ func filterByGlob(rels []string, pattern string) ([]string, error) {
 
 	return filterGlobStream(context.Background(), strings.NewReader(strings.Join(rels, "\n")), "", patternSegs)
 }
+
+// writeHiddenFixture builds a tree with a dot-directory worth listing and a
+// .git directory holding a same-named file that must never surface.
+func writeHiddenFixture(t *testing.T) string {
+	t.Helper()
+
+	root := t.TempDir()
+	for _, rel := range []string{".github/x.yaml", ".git/x.yaml", "plain.yaml"} {
+		p := filepath.Join(root, rel)
+		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+		require.NoError(t, os.WriteFile(p, []byte("hiddentoken\n"), 0o644))
+	}
+
+	return root
+}
+
+func TestGlobBackendsIncludeHiddenExcludeGit(t *testing.T) {
+	root := writeHiddenFixture(t)
+	want := []string{".github/x.yaml", "plain.yaml"}
+
+	t.Run("fd", func(t *testing.T) {
+		requireFd(t)
+
+		rels, err := NewGlobTool(root).globViaFd(context.Background(), fdBinary(), "*.yaml", root)
+		require.NoError(t, err)
+		assert.ElementsMatch(t, want, rels)
+	})
+
+	t.Run("rg", func(t *testing.T) {
+		requireRg(t)
+
+		rels, err := NewGlobTool(root).globViaRg(context.Background(), "*.yaml", root)
+		require.NoError(t, err)
+		assert.ElementsMatch(t, want, rels)
+	})
+}

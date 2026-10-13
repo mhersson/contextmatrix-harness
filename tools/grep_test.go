@@ -131,3 +131,29 @@ func TestGrepCapsOutputLines(t *testing.T) {
 	assert.Contains(t, lines[len(lines)-1], "100 more matching lines")
 	assert.Contains(t, lines[len(lines)-1], "narrow the pattern")
 }
+
+func TestGrepIncludesHiddenExcludesGit(t *testing.T) {
+	requireRg(t)
+
+	root := t.TempDir()
+	for _, rel := range []string{".github/x.yaml", ".git/x.yaml", "plain.yaml"} {
+		p := filepath.Join(root, rel)
+		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+		require.NoError(t, os.WriteFile(p, []byte("hiddentoken\n"), 0o644))
+	}
+
+	for _, glob := range []string{"", "*.yaml"} {
+		t.Run("glob="+glob, func(t *testing.T) {
+			args := map[string]any{"pattern": "hiddentoken"}
+			if glob != "" {
+				args["glob"] = glob
+			}
+
+			out, err := NewGrepTool(root).Execute(context.Background(), args)
+			require.NoError(t, err)
+			assert.Contains(t, out.Text, filepath.Join(".github", "x.yaml"))
+			assert.Contains(t, out.Text, "plain.yaml")
+			assert.NotContains(t, out.Text, ".git"+string(filepath.Separator))
+		})
+	}
+}
