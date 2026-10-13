@@ -17,11 +17,7 @@ import (
 )
 
 func TestGlobTool(t *testing.T) {
-	if fdBinary() == "" {
-		if _, err := exec.LookPath("rg"); err != nil {
-			t.Skip("neither fd nor rg installed")
-		}
-	}
+	requireFdOrRg(t)
 
 	root := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(root, "a.go"), []byte("package x\n"), 0o644))
@@ -41,11 +37,7 @@ func TestGlobTool(t *testing.T) {
 }
 
 func TestGlobToolRespectsGitignore(t *testing.T) {
-	if fdBinary() == "" {
-		if _, err := exec.LookPath("rg"); err != nil {
-			t.Skip("neither fd nor rg installed")
-		}
-	}
+	requireFdOrRg(t)
 
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
@@ -161,9 +153,7 @@ func TestGlobDirectoryPatterns(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name+"/fd", func(t *testing.T) {
-			if fdBinary() == "" {
-				t.Skip("fd not installed")
-			}
+			requireFd(t)
 
 			rels, err := NewGlobTool(root).globViaFd(context.Background(), fdBinary(), tc.pattern, root)
 			require.NoError(t, err)
@@ -171,9 +161,7 @@ func TestGlobDirectoryPatterns(t *testing.T) {
 		})
 
 		t.Run(tc.name+"/rg", func(t *testing.T) {
-			if _, err := exec.LookPath("rg"); err != nil {
-				t.Skip("rg not installed")
-			}
+			requireRg(t)
 
 			rels, err := NewGlobTool(root).globViaRg(context.Background(), tc.pattern, root)
 			require.NoError(t, err)
@@ -183,11 +171,7 @@ func TestGlobDirectoryPatterns(t *testing.T) {
 }
 
 func TestGlobToolPathScoped(t *testing.T) {
-	if fdBinary() == "" {
-		if _, err := exec.LookPath("rg"); err != nil {
-			t.Skip("neither fd nor rg installed")
-		}
-	}
+	requireFdOrRg(t)
 
 	root := t.TempDir()
 	writeGlobFixture(t, root)
@@ -380,9 +364,7 @@ func TestGlobBackendsMalformedPattern(t *testing.T) {
 
 	for _, pattern := range patterns {
 		t.Run(pattern+"/fd", func(t *testing.T) {
-			if fdBinary() == "" {
-				t.Skip("fd not installed")
-			}
+			requireFd(t)
 
 			_, err := NewGlobTool(root).globViaFd(context.Background(), fdBinary(), pattern, root)
 			require.Error(t, err)
@@ -390,9 +372,7 @@ func TestGlobBackendsMalformedPattern(t *testing.T) {
 		})
 
 		t.Run(pattern+"/rg", func(t *testing.T) {
-			if _, err := exec.LookPath("rg"); err != nil {
-				t.Skip("rg not installed")
-			}
+			requireRg(t)
 
 			_, err := NewGlobTool(root).globViaRg(context.Background(), pattern, root)
 			require.Error(t, err)
@@ -402,9 +382,7 @@ func TestGlobBackendsMalformedPattern(t *testing.T) {
 }
 
 func TestGlobViaRgRespectsGitignore(t *testing.T) {
-	if _, err := exec.LookPath("rg"); err != nil {
-		t.Skip("rg not installed")
-	}
+	requireRg(t)
 
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")

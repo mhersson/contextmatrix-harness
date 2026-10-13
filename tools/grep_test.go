@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,9 +13,7 @@ import (
 )
 
 func TestGrepTool(t *testing.T) {
-	if _, err := exec.LookPath("rg"); err != nil {
-		t.Skip("ripgrep (rg) not installed")
-	}
+	requireRg(t)
 
 	root := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(root, "a.go"), []byte("package x\nfunc Encode() {}\n"), 0o644))
@@ -33,9 +30,7 @@ func TestGrepTool(t *testing.T) {
 }
 
 func TestGrepToolDashPattern(t *testing.T) {
-	if _, err := exec.LookPath("rg"); err != nil {
-		t.Skip("ripgrep (rg) not installed")
-	}
+	requireRg(t)
 
 	root := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(root, "c.txt"), []byte("a-b-c\n"), 0o644))
@@ -46,9 +41,7 @@ func TestGrepToolDashPattern(t *testing.T) {
 }
 
 func TestGrepEmptyWithBRE(t *testing.T) {
-	if _, err := exec.LookPath("rg"); err != nil {
-		t.Skip("ripgrep (rg) not installed")
-	}
+	requireRg(t)
 
 	root := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(root, "test.txt"), []byte("hello world\n"), 0o644))
@@ -62,9 +55,7 @@ func TestGrepEmptyWithBRE(t *testing.T) {
 }
 
 func TestGrepEmptyWithValidRustEscapeNoBREHint(t *testing.T) {
-	if _, err := exec.LookPath("rg"); err != nil {
-		t.Skip("ripgrep (rg) not installed")
-	}
+	requireRg(t)
 
 	root := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(root, "test.txt"), []byte("hello world\n"), 0o644))
@@ -81,9 +72,7 @@ func TestGrepEmptyWithValidRustEscapeNoBREHint(t *testing.T) {
 }
 
 func TestGrepStripDoesNotCorruptSecondaryRootInfixPath(t *testing.T) {
-	if _, err := exec.LookPath("rg"); err != nil {
-		t.Skip("ripgrep (rg) not installed")
-	}
+	requireRg(t)
 
 	tmp := t.TempDir()
 	workspace := filepath.Join(tmp, "workspace")
@@ -111,9 +100,7 @@ func TestGrepStripDoesNotCorruptSecondaryRootInfixPath(t *testing.T) {
 }
 
 func TestGrepEmptyPlain(t *testing.T) {
-	if _, err := exec.LookPath("rg"); err != nil {
-		t.Skip("ripgrep (rg) not installed")
-	}
+	requireRg(t)
 
 	root := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(root, "test.txt"), []byte("hello world\n"), 0o644))
@@ -124,9 +111,7 @@ func TestGrepEmptyPlain(t *testing.T) {
 }
 
 func TestGrepCapsOutputLines(t *testing.T) {
-	if _, err := exec.LookPath("rg"); err != nil {
-		t.Skip("ripgrep (rg) not installed")
-	}
+	requireRg(t)
 
 	root := t.TempDir()
 
