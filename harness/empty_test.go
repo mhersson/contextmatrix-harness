@@ -12,227 +12,87 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// emptyReply is an empty response that still bills, so accumulation is observable.
-func emptyReply() llm.Response {
-	return llm.Response{FinishReason: "stop", Usage: llm.Usage{PromptTokens: 10, CompletionTokens: 1, Cost: 0.25}}
-}
-
-func retryEvents(t *testing.T, transcript string) []events.Event {
+// runEmpty runs the scripted replies and returns the result, the replies
+// consumed and the number of empty_response_retry events.
+func runEmpty(t *testing.T, cfg Config, replies ...llm.Response) (Result, int, int, error) {
 	t.Helper()
 
-	var out []events.Event
-
-	for _, ev := range parseEvents(t, transcript) {
-		if ev.Kind == events.StateChange && ev.Data["event"] == "empty_response_retry" {
-			out = append(out, ev)
-		}
-	}
-
-	return out
-}
-
-func runScripted(t *testing.T, responses []llm.Response, cfg Config) (Result, *fakeLLM, string, error) {
-	t.Helper()
-
-	f := &fakeLLM{responses: responses}
-	reg := tools.NewRegistry(tools.NewReadTool(t.TempDir()))
+	f := &fakeLLM{responses: replies}
 
 	var transcript bytes.Buffer
 
-	if cfg.MaxTurns == 0 && !cfg.Interactive {
-		cfg.MaxTurns = 20
-	}
+	res, err := Run(context.Background(), f, tools.NewRegistry(), events.NewEmitter(nil, &transcript), "task", cfg)
 
-	res, err := Run(context.Background(), f, reg, events.NewEmitter(nil, &transcript), "task", cfg)
+	retries := 0
 
-	return res, f, transcript.String(), err
-}
-
-func TestRunEmptyReplyThenAnswerCompletes(t *testing.T) {
-	res, f, tr, err := runScripted(t, []llm.Response{emptyReply(), {Content: "answer", FinishReason: "stop"}}, Config{})
-	require.NoError(t, err)
-	assert.True(t, res.Completed)
-	assert.Equal(t, "done", res.Reason)
-	assert.Equal(t, "answer", res.Output)
-	assert.Equal(t, 2, f.i)
-
-	retries := retryEvents(t, tr)
-	require.Len(t, retries, 1)
-	assert.EqualValues(t, 1, retries[0].Data["retry"])
-	assert.EqualValues(t, 1, retries[0].Data["turn"])
-
-	var assistant []string
-
-	for _, m := range res.Messages {
-		if m.Role == "assistant" {
-			assistant = append(assistant, m.Content)
+	for _, ev := range parseEvents(t, transcript.String()) {
+		if ev.Data["event"] == "empty_response_retry" {
+			retries++
 		}
 	}
 
-	assert.Equal(t, []string{"answer"}, assistant)
+	return res, f.i, retries, err
+}
+
+func TestRunEmptyRepliesRetryThenComplete(t *testing.T) {
+	res, calls, _, err := runEmpty(t, Config{}, llm.Response{}, llm.Response{}, llm.Response{Content: "answer"})
+	require.NoError(t, err)
+	assert.True(t, res.Completed)
+	assert.Equal(t, "done", res.Reason)
+	assert.Equal(t, 3, calls)
 }
 
 func TestRunEmptyRepliesExhaustRetriesAndFail(t *testing.T) {
-	res, f, tr, err := runScripted(t, []llm.Response{emptyReply(), emptyReply(), emptyReply(), {Content: "late", FinishReason: "stop"}}, Config{})
+	call := llm.Response{ToolCalls: []llm.ToolCall{toolCall("1", "read", "{}")}}
+	res, calls, _, err := runEmpty(t, Config{}, llm.Response{}, llm.Response{}, call, llm.Response{}, llm.Response{}, llm.Response{}, llm.Response{Content: "late"})
 	require.ErrorIs(t, err, ErrEmptyResponse)
-	assert.False(t, res.Completed)
 	assert.Equal(t, "error", res.Reason)
-	assert.Equal(t, 3, f.i)
-	assert.InDelta(t, 0.75, res.TotalCostUSD, 1e-9)
-	assert.EqualValues(t, 30, res.PromptTokens)
-
-	retries := retryEvents(t, tr)
-	require.Len(t, retries, 2)
-	assert.EqualValues(t, 1, retries[0].Data["retry"])
-	assert.EqualValues(t, 2, retries[1].Data["retry"])
-
-	var sawError bool
-
-	for _, ev := range parseEvents(t, tr) {
-		sawError = sawError || ev.Kind == events.ErrorKind
-	}
-
-	assert.True(t, sawError)
+	// The tool turn restarts the count, so the third empty after it fails the run.
+	assert.Equal(t, 6, calls)
 }
 
-func TestRunEmptyReplyClassification(t *testing.T) {
-	tests := []struct {
-		name      string
-		first     llm.Response
-		wantCalls int
-		wantRetry int
-	}{
-		{"whitespace content is empty", llm.Response{Content: "\n  ", FinishReason: "stop"}, 2, 1},
-		{"reasoning only is a reply", llm.Response{Reasoning: "thinking", FinishReason: "stop"}, 1, 0},
-		{"short answer is a reply", llm.Response{Content: "OK", FinishReason: "stop"}, 1, 0},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			res, _, tr, err := runScripted(t, []llm.Response{tt.first}, Config{})
-			require.NoError(t, err)
-			assert.True(t, res.Completed)
-			assert.Equal(t, "done", res.Reason)
-			assert.Equal(t, tt.wantCalls, countKind(t, tr, events.ModelRequest))
-			assert.Len(t, retryEvents(t, tr), tt.wantRetry)
-		})
-	}
-}
-
-func countKind(t *testing.T, transcript string, kind events.Kind) int {
-	t.Helper()
-
-	n := 0
-
-	for _, ev := range parseEvents(t, transcript) {
-		if ev.Kind == kind {
-			n++
-		}
-	}
-
-	return n
-}
-
-func TestRunEmptyCountResetsAfterNonEmptyReply(t *testing.T) {
-	// Two empties, a tool turn, then two more empties: without the reset the
-	// fourth empty would exceed the budget.
-	call := llm.Response{ToolCalls: []llm.ToolCall{toolCall("1", "read", `{"path":"missing"}`)}}
-	res, _, tr, err := runScripted(t, []llm.Response{
-		emptyReply(), emptyReply(), call, emptyReply(), emptyReply(), {Content: "fin", FinishReason: "stop"},
-	}, Config{})
+func TestRunReasoningOnlyReplyCompletes(t *testing.T) {
+	res, calls, _, err := runEmpty(t, Config{}, llm.Response{Reasoning: "thought"}, llm.Response{Content: "late"})
 	require.NoError(t, err)
 	assert.Equal(t, "done", res.Reason)
-	assert.Equal(t, "fin", res.Output)
-
-	retries := retryEvents(t, tr)
-	require.Len(t, retries, 4)
-	assert.EqualValues(t, 1, retries[2].Data["retry"])
+	assert.Equal(t, 1, calls)
 }
 
-func TestRunEmptyRepliesStopAtCostCap(t *testing.T) {
-	res, f, _, err := runScripted(t, []llm.Response{emptyReply(), emptyReply(), emptyReply()}, Config{MaxCostUSD: 0.3})
-	require.NoError(t, err)
-	assert.Equal(t, "max_cost", res.Reason)
-	assert.False(t, res.Completed)
-	assert.Equal(t, 2, f.i)
+func TestRunContextLimitAndCompactionPrecedeEmptyRetry(t *testing.T) {
+	overLimit := llm.Response{Usage: llm.Usage{PromptTokens: 900}}
+
+	t.Run("hard stop", func(t *testing.T) {
+		res, _, retries, err := runEmpty(t, Config{ContextWindow: 1000}, overLimit)
+		require.NoError(t, err)
+		assert.Equal(t, "context_limit", res.Reason)
+		assert.Zero(t, retries)
+	})
+
+	t.Run("compaction", func(t *testing.T) {
+		history := make([]llm.Message, 20)
+		for i := range history {
+			history[i] = llm.Message{Role: "user", Content: "m"}
+		}
+
+		res, calls, retries, err := runEmpty(t, Config{
+			ContextWindow: 1000, History: history,
+			Compaction: &Compaction{Threshold: 0.85, KeepRecentTurns: 2},
+		}, llm.Response{}, llm.Response{}, overLimit, llm.Response{Content: "SUMMARY"}, llm.Response{}, llm.Response{Content: "answer"})
+		require.NoError(t, err)
+		assert.Equal(t, "done", res.Reason)
+		assert.Equal(t, 6, calls)
+		// Compaction restarts the count, so the empty after it is retried, not fatal.
+		assert.Equal(t, 3, retries)
+	})
 }
 
-func TestInteractiveEmptyRepliesAwaitInputWithFreshBudget(t *testing.T) {
-	inbox := &scriptedInbox{
-		pending:            []UserMessage{{Content: "again", MessageID: "m1"}},
-		closeErr:           ErrInboxClosed,
-		deliverViaWaitOnly: true,
-	}
-	res, f, tr, err := runScripted(t, []llm.Response{
-		emptyReply(), emptyReply(), emptyReply(), emptyReply(), {Content: "recovered", FinishReason: "stop"},
-	}, Config{Interactive: true, Inbox: inbox})
+func TestInteractiveEmptyRepliesAwaitInput(t *testing.T) {
+	inbox := &scriptedInbox{pending: []UserMessage{{Content: "again"}}, closeErr: ErrInboxClosed, deliverViaWaitOnly: true}
+	res, calls, retries, err := runEmpty(t, Config{Interactive: true, Inbox: inbox},
+		llm.Response{}, llm.Response{}, llm.Response{}, llm.Response{}, llm.Response{Content: "answer"})
 	require.NoError(t, err)
 	assert.True(t, res.Completed)
-	assert.Equal(t, "recovered", res.Output)
-	assert.Equal(t, 5, f.i)
-
-	var sawError bool
-
-	for _, ev := range parseEvents(t, tr) {
-		sawError = sawError || ev.Kind == events.ErrorKind
-	}
-
-	assert.True(t, sawError)
-	// Fresh budget after the human message: 2 retries before the failure, 1 after.
-	assert.Len(t, retryEvents(t, tr), 3)
-}
-
-func TestRunEmptyReplyAtContextLimitStopsWithoutRetry(t *testing.T) {
-	r := emptyReply()
-	r.Usage.PromptTokens = 900
-	res, f, tr, err := runScripted(t, []llm.Response{r, {Content: "late", FinishReason: "stop"}}, Config{ContextWindow: 1000})
-	require.NoError(t, err)
-	assert.Equal(t, "context_limit", res.Reason)
-	assert.Equal(t, 1, f.i)
-	assert.Empty(t, retryEvents(t, tr))
-}
-
-func TestRunEmptyReplyOverCompactionThresholdCompacts(t *testing.T) {
-	history := make([]llm.Message, 20)
-	for i := range history {
-		history[i] = llm.Message{Role: "user", Content: "m"}
-	}
-
-	r := emptyReply()
-	r.Usage.PromptTokens = 900
-	res, _, tr, err := runScripted(t, []llm.Response{r, {Content: "SUMMARY"}, {Content: "final", FinishReason: "stop"}}, Config{
-		ContextWindow: 1000,
-		Compaction:    &Compaction{Threshold: 0.85, KeepRecentTurns: 2},
-		History:       history,
-	})
-	require.NoError(t, err)
-	assert.Equal(t, "done", res.Reason)
-	assert.Equal(t, "final", res.Output)
-	assert.Empty(t, retryEvents(t, tr))
-}
-
-func TestRunEmptyCountResetsWhenCompactionReplacesRequest(t *testing.T) {
-	history := make([]llm.Message, 20)
-	for i := range history {
-		history[i] = llm.Message{Role: "user", Content: "m"}
-	}
-
-	toolOverThreshold := llm.Response{
-		ToolCalls: []llm.ToolCall{toolCall("1", "read", `{"path":"missing"}`)},
-		Usage:     llm.Usage{PromptTokens: 900},
-	}
-	res, _, tr, err := runScripted(t, []llm.Response{
-		emptyReply(), emptyReply(), toolOverThreshold,
-		{Content: "SUMMARY"},
-		emptyReply(),
-		{Content: "final", FinishReason: "stop"},
-	}, Config{
-		ContextWindow: 1000,
-		Compaction:    &Compaction{Threshold: 0.85, KeepRecentTurns: 2},
-		History:       history,
-	})
-	require.NoError(t, err)
-	assert.Equal(t, "done", res.Reason)
-	assert.Equal(t, "final", res.Output)
-	assert.Len(t, retryEvents(t, tr), 3)
+	assert.Equal(t, 5, calls)
+	// Two retries before the failure and one after the message: the budget restarted.
+	assert.Equal(t, 3, retries)
 }

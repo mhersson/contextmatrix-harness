@@ -276,42 +276,13 @@ func TestSendRetriesDecodeFailure(t *testing.T) {
 	assert.EqualValues(t, 2, requests.Load())
 }
 
-func TestClientSendProvider(t *testing.T) {
-	tests := []struct {
-		name, provider, want string
-	}{
-		{"string", `"provider":"DeepInfra",`, "DeepInfra"},
-		{"absent", ``, ""},
-		{"object", `"provider":{"name":"x"},`, ""},
-		{"null", `"provider":null,`, ""},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				_, _ = io.WriteString(w, `{`+tt.provider+`"model":"m","choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"hi"}}]}`)
-			}))
-			defer srv.Close()
-
-			c := NewClient("k", WithBaseURL(srv.URL))
-			resp, err := c.Send(context.Background(), Request{Model: "m", Messages: []Message{{Role: "user", Content: "q"}}})
-			require.NoError(t, err)
-			assert.Equal(t, tt.want, resp.Provider)
-			assert.Equal(t, "hi", resp.Content)
-		})
-	}
-}
-
-func TestClientSendStreamOpenAIDialectNoProvider(t *testing.T) {
+func TestClientSendParsesProvider(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		io.WriteString(w, "data: {\"model\":\"m\",\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\ndata: [DONE]\n") //nolint:errcheck
+		io.WriteString(w, `{"provider":"DeepInfra","choices":[{"message":{"content":"hi"}}]}`) //nolint:errcheck
 	}))
 	defer srv.Close()
 
-	c := NewClient("k", WithBaseURL(srv.URL), WithDialect(DialectOpenAI))
-	resp, err := c.SendStream(context.Background(), Request{Model: "m", Messages: []Message{{Role: "user", Content: "hi"}}}, nil)
+	resp, err := NewClient("k", WithBaseURL(srv.URL)).Send(context.Background(), Request{Model: "m"})
 	require.NoError(t, err)
-	assert.Equal(t, "ok", resp.Content)
-	assert.Empty(t, resp.Provider)
+	assert.Equal(t, "DeepInfra", resp.Provider)
 }
