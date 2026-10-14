@@ -210,3 +210,29 @@ func TestRunEmptyReplyOverCompactionThresholdCompacts(t *testing.T) {
 	assert.Equal(t, "final", res.Output)
 	assert.Empty(t, retryEvents(t, tr))
 }
+
+func TestRunEmptyCountResetsWhenCompactionReplacesRequest(t *testing.T) {
+	history := make([]llm.Message, 20)
+	for i := range history {
+		history[i] = llm.Message{Role: "user", Content: "m"}
+	}
+
+	toolOverThreshold := llm.Response{
+		ToolCalls: []llm.ToolCall{toolCall("1", "read", `{"path":"missing"}`)},
+		Usage:     llm.Usage{PromptTokens: 900},
+	}
+	res, _, tr, err := runScripted(t, []llm.Response{
+		emptyReply(), emptyReply(), toolOverThreshold,
+		{Content: "SUMMARY"},
+		emptyReply(),
+		{Content: "final", FinishReason: "stop"},
+	}, Config{
+		ContextWindow: 1000,
+		Compaction:    &Compaction{Threshold: 0.85, KeepRecentTurns: 2},
+		History:       history,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "done", res.Reason)
+	assert.Equal(t, "final", res.Output)
+	assert.Len(t, retryEvents(t, tr), 3)
+}

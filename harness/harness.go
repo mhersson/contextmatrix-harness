@@ -385,6 +385,7 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 						// see a model_response/thinking for an abandoned turn followed
 						// by the compaction event.
 						msgs = newMsgs
+						emptyRun = 0
 
 						continue
 					}
@@ -438,7 +439,7 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 					continue
 				}
 
-				err = fmt.Errorf("%d consecutive empty model replies: %w", emptyRun, ErrEmptyResponse)
+				err = fmt.Errorf("%w after %d consecutive replies", ErrEmptyResponse, emptyRun)
 			} else {
 				emptyRun = 0
 			}
