@@ -43,10 +43,12 @@ func TestRunEmptyRepliesRetryThenComplete(t *testing.T) {
 }
 
 func TestRunEmptyRepliesExhaustRetriesAndFail(t *testing.T) {
-	res, calls, _, err := runEmpty(t, Config{}, llm.Response{}, llm.Response{}, llm.Response{}, llm.Response{Content: "late"})
+	call := llm.Response{ToolCalls: []llm.ToolCall{toolCall("1", "read", "{}")}}
+	res, calls, _, err := runEmpty(t, Config{}, llm.Response{}, llm.Response{}, call, llm.Response{}, llm.Response{}, llm.Response{}, llm.Response{Content: "late"})
 	require.ErrorIs(t, err, ErrEmptyResponse)
 	assert.Equal(t, "error", res.Reason)
-	assert.Equal(t, 3, calls)
+	// The tool turn restarts the count, so the third empty after it fails the run.
+	assert.Equal(t, 6, calls)
 }
 
 func TestRunReasoningOnlyReplyCompletes(t *testing.T) {
@@ -75,11 +77,12 @@ func TestRunContextLimitAndCompactionPrecedeEmptyRetry(t *testing.T) {
 		res, calls, retries, err := runEmpty(t, Config{
 			ContextWindow: 1000, History: history,
 			Compaction: &Compaction{Threshold: 0.85, KeepRecentTurns: 2},
-		}, overLimit, llm.Response{Content: "SUMMARY"}, llm.Response{Content: "answer"})
+		}, llm.Response{}, llm.Response{}, overLimit, llm.Response{Content: "SUMMARY"}, llm.Response{}, llm.Response{Content: "answer"})
 		require.NoError(t, err)
 		assert.Equal(t, "done", res.Reason)
-		assert.Equal(t, 3, calls)
-		assert.Zero(t, retries)
+		assert.Equal(t, 6, calls)
+		// Compaction restarts the count, so the empty after it is retried, not fatal.
+		assert.Equal(t, 3, retries)
 	})
 }
 
