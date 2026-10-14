@@ -158,3 +158,47 @@ func TestParseStreamTruncationDetection(t *testing.T) {
 		})
 	}
 }
+
+func TestParseStreamProvider(t *testing.T) {
+	tests := []struct {
+		name         string
+		provider     string
+		wantProvider string
+	}{
+		{"string", `"provider":"DeepInfra",`, "DeepInfra"},
+		{"absent", ``, ""},
+		{"object", `"provider":{"name":"x"},`, ""},
+		{"null", `"provider":null,`, ""},
+		{"number", `"provider":3,`, ""},
+		{"empty string", `"provider":"",`, ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sse := strings.Join([]string{
+				`data: {` + tt.provider + `"model":"m","choices":[{"delta":{"content":"hi"}}]}`,
+				`data: {` + tt.provider + `"choices":[{"delta":{"tool_calls":[{"index":0,"id":"a","function":{"name":"read","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}`,
+				`data: [DONE]`,
+			}, "\n") + "\n"
+
+			resp, err := parseStream(strings.NewReader(sse), nil)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantProvider, resp.Provider)
+			assert.Equal(t, "hi", resp.Content)
+			require.Len(t, resp.ToolCalls, 1)
+		})
+	}
+}
+
+func TestParseStreamProviderLastNonEmptyWins(t *testing.T) {
+	sse := strings.Join([]string{
+		`data: {"provider":"A","choices":[{"delta":{"content":"x"}}]}`,
+		`data: {"provider":"B","choices":[{"delta":{}}]}`,
+		`data: {"provider":null,"choices":[{"delta":{},"finish_reason":"stop"}]}`,
+		`data: [DONE]`,
+	}, "\n") + "\n"
+
+	resp, err := parseStream(strings.NewReader(sse), nil)
+	require.NoError(t, err)
+	assert.Equal(t, "B", resp.Provider)
+}

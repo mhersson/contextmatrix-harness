@@ -168,17 +168,17 @@ func sendTurn(ctx context.Context, client llm.LLM, emit *events.Emitter, cfg Con
 		emit.Emit(events.Thinking, map[string]any{"turn": res.Turns, "content": redactStr(cfg, resp.Reasoning)})
 	}
 
-	emit.Emit(events.ModelResponse, map[string]any{
+	emit.Emit(events.ModelResponse, withProvider(map[string]any{
 		"turn": res.Turns, "finish_reason": resp.FinishReason,
 		"tool_calls": len(resp.ToolCalls), "content_len": len(resp.Content),
 		"content": redactStr(cfg, resp.Content), "model": cfg.Model,
-	})
-	emit.Emit(events.UsageKind, map[string]any{
+	}, resp.Provider))
+	emit.Emit(events.UsageKind, withProvider(map[string]any{
 		"prompt_tokens": prompt, "completion_tokens": resp.Usage.CompletionTokens,
 		"cost_usd": resp.Usage.Cost, "model": cfg.Model,
 		"cache_read_tokens": cacheRead, "cache_creation_tokens": cacheCreation,
 		"wire_prompt_tokens": resp.Usage.PromptTokens,
-	})
+	}, resp.Provider))
 
 	return resp, nil
 }

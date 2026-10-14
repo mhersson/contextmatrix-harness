@@ -44,7 +44,9 @@ mount, tool set).
 
 ## Terminating tool
 
-By default `Run` ends when the model emits a turn with no tool calls. A consumer
+By default `Run` ends when the model emits a non-empty turn with no tool calls.
+An empty reply (no content, reasoning or tool calls) is retried up to twice,
+then fails the run with `harness.ErrEmptyResponse` (`Reason "error"`). A consumer
 can instead let the model end the run with an explicit action: register a tool
 that implements `tools.Terminal`.
 

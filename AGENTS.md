@@ -67,10 +67,12 @@ Orchestration, protocol, transport, and policy belong in the consuming backends
   (`tools/bash.go`), the caller-mounted skills directory (`NewSkillTool`,
   `tools/skill.go`), and tool-set composition (`tools.ReadOnlyTools`,
   `tools/readonly.go`).
-- **Terminating tool.** `Run` ends on a turn with no tool calls, *or* when a tool
-  implementing `tools.Terminal` succeeds - then `Result.Completed`, `Reason
-  "done"`, and the call args on `Result.CompletionArgs`. Termination gates on
-  execution: a terminating tool that errors does not end the run. See `README.md`
+- **Terminating tool.** `Run` ends on a non-empty turn with no tool calls, *or*
+  when a tool implementing `tools.Terminal` succeeds - then `Result.Completed`,
+  `Reason "done"`, and the call args on `Result.CompletionArgs`. Termination gates
+  on execution: a terminating tool that errors does not end the run. An empty
+  reply (no content, reasoning or tool calls) is retried up to twice, then fails
+  the run with `harness.ErrEmptyResponse` (`Reason "error"`). See `README.md`
   § Terminating tool.
 - **Redaction is injected, not baked in.** The loop masks output only through
   `Config.RedactToolOutput`; the `redact` package supplies the masker.
