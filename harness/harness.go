@@ -33,6 +33,18 @@ const ReasonIncapable = "incapable"
 // The model reads this text, so it states the fact and nothing else.
 const postTerminalResult = "unexecuted: an earlier call in this batch ended the run"
 
+// maxEmptyResponseRetries is how many times an empty model reply is re-sent
+// before the run fails, so at most maxEmptyResponseRetries+1 calls in a row.
+const maxEmptyResponseRetries = 2
+
+// ErrEmptyResponse is returned when the model keeps replying with no content, reasoning or tool calls.
+var ErrEmptyResponse = errors.New("harness: empty model response")
+
+// isEmptyResponse reports a reply carrying nothing to act on or to accept as a final answer.
+func isEmptyResponse(resp llm.Response) bool {
+	return strings.TrimSpace(resp.Content) == "" && len(resp.ToolCalls) == 0 && strings.TrimSpace(resp.Reasoning) == ""
+}
+
 // contextLimitThreshold is the fraction of the model's context window that, once
 // the prompt reaches it, makes the harness stop and return incomplete when no
 // Compaction is configured. With Config.Compaction set, in-window compaction
@@ -237,6 +249,9 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 	// nudged guards the one-shot wrap-up injection.
 	nudged := false
 
+	// emptyRun counts consecutive empty model replies.
+	emptyRun := 0
+
 	// batchNudged guards the one-shot batching injection; singleBatchTurns counts
 	// the consecutive turns that each spent a whole model call on one read-only
 	// tool call. Any other turn shape resets it.
@@ -297,6 +312,60 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 		emit.Emit(events.ModelRequest, map[string]any{"turn": res.Turns, "model": cfg.Model, "messages": len(msgs)})
 
 		resp, err := client.SendStream(ctx, req, cfg.OnDelta)
+		if err == nil {
+			prompt, cacheRead, cacheCreation := resp.Usage.Buckets()
+
+			res.TotalCostUSD += resp.Usage.Cost
+			res.PromptTokens += int64(prompt)
+			res.CompletionTokens += int64(resp.Usage.CompletionTokens)
+			res.CacheReadTokens += int64(cacheRead)
+			res.CacheCreationTokens += int64(cacheCreation)
+
+			if resp.Model != "" {
+				res.ModelUsed = resp.Model
+			}
+
+			res.Output = resp.Content
+
+			if resp.Reasoning != "" {
+				emit.Emit(events.Thinking, map[string]any{"turn": res.Turns, "content": redactStr(cfg, resp.Reasoning)})
+			}
+
+			emit.Emit(events.ModelResponse, map[string]any{
+				"turn": res.Turns, "finish_reason": resp.FinishReason,
+				"tool_calls": len(resp.ToolCalls), "content_len": len(resp.Content),
+				"content": redactStr(cfg, resp.Content), "model": cfg.Model,
+			})
+			// The three token counts are the disjoint buckets Result accumulates, so a
+			// transcript sums to the same totals the run reports: prompt excludes the
+			// cached portion rather than overlapping cache_read_tokens.
+			emit.Emit(events.UsageKind, map[string]any{
+				"prompt_tokens": prompt, "completion_tokens": resp.Usage.CompletionTokens,
+				"cost_usd": resp.Usage.Cost, "model": cfg.Model,
+				"cache_read_tokens": cacheRead, "cache_creation_tokens": cacheCreation,
+				// wire_prompt_tokens is the raw pre-normalization wire value
+				// (Usage.PromptTokens, untouched by Buckets()): equal to
+				// prompt_tokens on an already-disjoint wire, larger when the
+				// subset subtraction ran. Makes rows self-describing across a
+				// mixed-version fleet without changing the meaning of the
+				// existing prompt_tokens field.
+				"wire_prompt_tokens": resp.Usage.PromptTokens,
+			})
+
+			if isEmptyResponse(resp) {
+				emptyRun++
+				if emptyRun <= maxEmptyResponseRetries {
+					emit.Emit(events.StateChange, map[string]any{"event": "empty_response_retry", "turn": res.Turns, "retry": emptyRun})
+
+					continue
+				}
+
+				err = fmt.Errorf("harness: %d consecutive empty model replies: %w", emptyRun, ErrEmptyResponse)
+			} else {
+				emptyRun = 0
+			}
+		}
+
 		if err != nil {
 			// Transport errors embed the provider response body (llm/client.go),
 			// so this emit goes through the same redaction and size cap as every
@@ -304,6 +373,8 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 			emit.Emit(events.ErrorKind, map[string]any{
 				"error": tools.HeadTail(redactStr(cfg, err.Error()), cfg.ToolOutputMaxBytes),
 			})
+
+			emptyRun = 0
 
 			if cfg.Interactive {
 				var (
@@ -332,45 +403,6 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 
 			return res, err
 		}
-
-		prompt, cacheRead, cacheCreation := resp.Usage.Buckets()
-
-		res.TotalCostUSD += resp.Usage.Cost
-		res.PromptTokens += int64(prompt)
-		res.CompletionTokens += int64(resp.Usage.CompletionTokens)
-		res.CacheReadTokens += int64(cacheRead)
-		res.CacheCreationTokens += int64(cacheCreation)
-
-		if resp.Model != "" {
-			res.ModelUsed = resp.Model
-		}
-
-		res.Output = resp.Content
-
-		if resp.Reasoning != "" {
-			emit.Emit(events.Thinking, map[string]any{"turn": res.Turns, "content": redactStr(cfg, resp.Reasoning)})
-		}
-
-		emit.Emit(events.ModelResponse, map[string]any{
-			"turn": res.Turns, "finish_reason": resp.FinishReason,
-			"tool_calls": len(resp.ToolCalls), "content_len": len(resp.Content),
-			"content": redactStr(cfg, resp.Content), "model": cfg.Model,
-		})
-		// The three token counts are the disjoint buckets Result accumulates, so a
-		// transcript sums to the same totals the run reports: prompt excludes the
-		// cached portion rather than overlapping cache_read_tokens.
-		emit.Emit(events.UsageKind, map[string]any{
-			"prompt_tokens": prompt, "completion_tokens": resp.Usage.CompletionTokens,
-			"cost_usd": resp.Usage.Cost, "model": cfg.Model,
-			"cache_read_tokens": cacheRead, "cache_creation_tokens": cacheCreation,
-			// wire_prompt_tokens is the raw pre-normalization wire value
-			// (Usage.PromptTokens, untouched by Buckets()): equal to
-			// prompt_tokens on an already-disjoint wire, larger when the
-			// subset subtraction ran. Makes rows self-describing across a
-			// mixed-version fleet without changing the meaning of the
-			// existing prompt_tokens field.
-			"wire_prompt_tokens": resp.Usage.PromptTokens,
-		})
 
 		if cfg.ContextWindow > 0 {
 			if cfg.Compaction != nil {

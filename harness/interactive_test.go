@@ -37,7 +37,7 @@ func (s *scriptedLLMWithErrors) SendStream(ctx context.Context, req llm.Request,
 
 func (s *scriptedLLMWithErrors) sendNext() (llm.Response, error) {
 	if s.i >= len(s.results) {
-		return llm.Response{FinishReason: "stop"}, nil
+		return llm.Response{Content: "done", FinishReason: "stop"}, nil
 	}
 
 	r := s.results[s.i]

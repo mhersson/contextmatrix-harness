@@ -27,7 +27,7 @@ func (d *deltaLLM) SendStream(ctx context.Context, req llm.Request, onDelta func
 
 func TestConfigOnDeltaReceivesStreamedFragments(t *testing.T) {
 	reg := tools.NewRegistry(tools.NewReadTool(t.TempDir()))
-	d := &deltaLLM{&burnLLM{responses: []llm.Response{{FinishReason: "stop"}}}}
+	d := &deltaLLM{&burnLLM{responses: []llm.Response{{Content: "done", FinishReason: "stop"}}}}
 
 	var got []llm.Delta
 

@@ -22,7 +22,7 @@ import (
 )
 
 // fakeLLM returns scripted responses in order; after they run out it returns an
-// empty response (no tool calls → loop treats it as "done").
+// final answer ("done"), which ends the run; an empty reply would be retried.
 type fakeLLM struct {
 	responses []llm.Response
 	i         int
@@ -38,7 +38,7 @@ func (f *fakeLLM) SendStream(ctx context.Context, req llm.Request, onDelta func(
 
 func (f *fakeLLM) next() llm.Response {
 	if f.i >= len(f.responses) {
-		return llm.Response{FinishReason: "stop"}
+		return llm.Response{Content: "done", FinishReason: "stop"}
 	}
 
 	r := f.responses[f.i]
@@ -137,13 +137,13 @@ type capturingLLM struct{ last llm.Request }
 func (c *capturingLLM) Send(ctx context.Context, req llm.Request) (llm.Response, error) {
 	c.last = req
 
-	return llm.Response{FinishReason: "stop"}, nil
+	return llm.Response{Content: "done", FinishReason: "stop"}, nil
 }
 
 func (c *capturingLLM) SendStream(ctx context.Context, req llm.Request, onDelta func(llm.Delta)) (llm.Response, error) {
 	c.last = req
 
-	return llm.Response{FinishReason: "stop"}, nil
+	return llm.Response{Content: "done", FinishReason: "stop"}, nil
 }
 
 func TestRunForwardsProviderAndReasoning(t *testing.T) {
@@ -819,7 +819,7 @@ func (c *capturingLLMSeq) SendStream(_ context.Context, req llm.Request, _ func(
 func (c *capturingLLMSeq) next(req llm.Request) llm.Response {
 	c.requests = append(c.requests, req)
 	if c.i >= len(c.responses) {
-		return llm.Response{FinishReason: "stop"}
+		return llm.Response{Content: "done", FinishReason: "stop"}
 	}
 
 	r := c.responses[c.i]
