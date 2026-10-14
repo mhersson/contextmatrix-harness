@@ -233,9 +233,10 @@ func (c *Client) do(ctx context.Context, req Request) (*http.Response, error) {
 }
 
 type nonStreamResponse struct {
-	Model   string `json:"model"`
-	Usage   Usage  `json:"usage"`
-	Choices []struct {
+	Model    string          `json:"model"`
+	Usage    Usage           `json:"usage"`
+	Provider json.RawMessage `json:"provider"`
+	Choices  []struct {
 		FinishReason string `json:"finish_reason"`
 		Message      struct {
 			Message
@@ -246,7 +247,7 @@ type nonStreamResponse struct {
 }
 
 func (n nonStreamResponse) toResponse() Response {
-	r := Response{Model: n.Model, Usage: n.Usage}
+	r := Response{Model: n.Model, Usage: n.Usage, Provider: providerName(n.Provider)}
 	if len(n.Choices) > 0 {
 		r.Content = n.Choices[0].Message.Content
 		r.ToolCalls = n.Choices[0].Message.ToolCalls

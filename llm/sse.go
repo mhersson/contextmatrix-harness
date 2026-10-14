@@ -14,10 +14,12 @@ import (
 const maxSSELine = 10 * 1024 * 1024
 
 type streamChunk struct {
-	Model   string         `json:"model"`
-	Choices []streamChoice `json:"choices"`
-	Usage   *Usage         `json:"usage"`
-	Error   *apiError      `json:"error"`
+	Model string `json:"model"`
+	// Raw so a non-string value from a gateway never fails the decode.
+	Provider json.RawMessage `json:"provider"`
+	Choices  []streamChoice  `json:"choices"`
+	Usage    *Usage          `json:"usage"`
+	Error    *apiError       `json:"error"`
 }
 
 type streamChoice struct {
@@ -105,6 +107,10 @@ func parseStreamWithLimit(r io.Reader, onDelta func(Delta), maxLine int) (Respon
 
 		if chunk.Model != "" {
 			resp.Model = chunk.Model
+		}
+
+		if p := providerName(chunk.Provider); p != "" {
+			resp.Provider = p
 		}
 
 		if chunk.Usage != nil {
@@ -207,4 +213,14 @@ func parseStreamWithLimit(r io.Reader, onDelta func(Delta), maxLine int) (Respon
 	}
 
 	return normalizeHarmony(resp), nil
+}
+
+// providerName returns the provider only when raw is a non-empty JSON string.
+func providerName(raw json.RawMessage) string {
+	var s string
+	if json.Unmarshal(raw, &s) != nil {
+		return ""
+	}
+
+	return s
 }

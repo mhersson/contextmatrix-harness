@@ -40,10 +40,10 @@ func effectiveCompactionThreshold(window int, threshold float64) int {
 // non-system message to be from the user, and the snapped boundary usually makes
 // the retained tail start with an assistant turn.
 // Returns an error when there is not enough context to summarize meaningfully, or
-// when the summarize call fails. The returned Usage is the cost/token accounting
-// for the summarize call itself (zero value on any error path) - callers must
+// when the summarize call fails. The returned Response carries the usage and provider
+// of the summarize call itself (zero value on any error path) - callers must
 // fold it into their running totals since it is a real billable request.
-func compact(ctx context.Context, client llm.LLM, cfg Config, msgs []llm.Message, keepRecent int, emit *events.Emitter) ([]llm.Message, llm.Usage, error) {
+func compact(ctx context.Context, client llm.LLM, cfg Config, msgs []llm.Message, keepRecent int, emit *events.Emitter) ([]llm.Message, llm.Response, error) {
 	if keepRecent < 0 {
 		keepRecent = 0
 	}
@@ -54,7 +54,7 @@ func compact(ctx context.Context, client llm.LLM, cfg Config, msgs []llm.Message
 	}
 
 	if len(msgs)-sysCount-keepRecent <= 1 {
-		return nil, llm.Usage{}, fmt.Errorf("compaction: not enough messages to summarize (total=%d sysCount=%d keepRecent=%d)", len(msgs), sysCount, keepRecent)
+		return nil, llm.Response{}, fmt.Errorf("compaction: not enough messages to summarize (total=%d sysCount=%d keepRecent=%d)", len(msgs), sysCount, keepRecent)
 	}
 
 	// Compute the split boundary, then snap it so a tool-call / tool-result
@@ -74,7 +74,7 @@ func compact(ctx context.Context, client llm.LLM, cfg Config, msgs []llm.Message
 
 	older := msgs[sysCount:b]
 	if len(older) == 0 {
-		return nil, llm.Usage{}, fmt.Errorf("compaction: snapped boundary left nothing to summarize (b=%d sysCount=%d keepRecent=%d)", b, sysCount, keepRecent)
+		return nil, llm.Response{}, fmt.Errorf("compaction: snapped boundary left nothing to summarize (b=%d sysCount=%d keepRecent=%d)", b, sysCount, keepRecent)
 	}
 
 	req := llm.Request{
@@ -88,7 +88,7 @@ func compact(ctx context.Context, client llm.LLM, cfg Config, msgs []llm.Message
 
 	resp, err := client.Send(ctx, req)
 	if err != nil {
-		return nil, llm.Usage{}, fmt.Errorf("compaction summarize: %w", err)
+		return nil, llm.Response{}, fmt.Errorf("compaction summarize: %w", err)
 	}
 
 	out := make([]llm.Message, 0, sysCount+1+len(msgs)-b)
@@ -102,5 +102,5 @@ func compact(ctx context.Context, client llm.LLM, cfg Config, msgs []llm.Message
 		"summarized":  len(older),
 	})
 
-	return out, resp.Usage, nil
+	return out, resp, nil
 }

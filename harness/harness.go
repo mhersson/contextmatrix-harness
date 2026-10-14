@@ -331,15 +331,15 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 				emit.Emit(events.Thinking, map[string]any{"turn": res.Turns, "content": redactStr(cfg, resp.Reasoning)})
 			}
 
-			emit.Emit(events.ModelResponse, map[string]any{
+			emit.Emit(events.ModelResponse, withProvider(map[string]any{
 				"turn": res.Turns, "finish_reason": resp.FinishReason,
 				"tool_calls": len(resp.ToolCalls), "content_len": len(resp.Content),
 				"content": redactStr(cfg, resp.Content), "model": cfg.Model,
-			})
+			}, resp.Provider))
 			// The three token counts are the disjoint buckets Result accumulates, so a
 			// transcript sums to the same totals the run reports: prompt excludes the
 			// cached portion rather than overlapping cache_read_tokens.
-			emit.Emit(events.UsageKind, map[string]any{
+			emit.Emit(events.UsageKind, withProvider(map[string]any{
 				"prompt_tokens": prompt, "completion_tokens": resp.Usage.CompletionTokens,
 				"cost_usd": resp.Usage.Cost, "model": cfg.Model,
 				"cache_read_tokens": cacheRead, "cache_creation_tokens": cacheCreation,
@@ -350,7 +350,7 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 				// mixed-version fleet without changing the meaning of the
 				// existing prompt_tokens field.
 				"wire_prompt_tokens": resp.Usage.PromptTokens,
-			})
+			}, resp.Provider))
 
 			if isEmptyResponse(resp) {
 				emptyRun++
@@ -407,11 +407,12 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 		if cfg.ContextWindow > 0 {
 			if cfg.Compaction != nil {
 				if resp.Usage.PromptTokens >= effectiveCompactionThreshold(cfg.ContextWindow, cfg.Compaction.Threshold) {
-					newMsgs, cUsage, cerr := compact(ctx, client, cfg, msgs, cfg.Compaction.KeepRecentTurns, emit)
+					newMsgs, cResp, cerr := compact(ctx, client, cfg, msgs, cfg.Compaction.KeepRecentTurns, emit)
 					if cerr == nil {
 						// The summarize call is real and billable regardless of whether it
 						// shrank the history, so it is counted against the budget here,
 						// before the shrink/no-progress branch below.
+						cUsage := cResp.Usage
 						cPrompt, cCacheRead, cCacheCreation := cUsage.Buckets()
 
 						res.TotalCostUSD += cUsage.Cost
@@ -420,12 +421,12 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 						res.CacheReadTokens += int64(cCacheRead)
 						res.CacheCreationTokens += int64(cCacheCreation)
 
-						emit.Emit(events.UsageKind, map[string]any{
+						emit.Emit(events.UsageKind, withProvider(map[string]any{
 							"prompt_tokens": cPrompt, "completion_tokens": cUsage.CompletionTokens,
 							"cost_usd": cUsage.Cost, "model": cfg.Model, "phase": "compaction",
 							"cache_read_tokens": cCacheRead, "cache_creation_tokens": cCacheCreation,
 							"wire_prompt_tokens": cUsage.PromptTokens,
-						})
+						}, cResp.Provider))
 					}
 
 					if cerr == nil && len(newMsgs) < len(msgs) {
@@ -875,4 +876,14 @@ func skipToolCall(emit *events.Emitter, tc llm.ToolCall, resultContent string, e
 	emit.Emit(events.ToolResult, data)
 
 	return toolResultMsg(tc.ID, resultContent)
+}
+
+// withProvider adds the serving provider to event data only when the gateway
+// reported one, so payloads from endpoints that do not are unchanged.
+func withProvider(data map[string]any, provider string) map[string]any {
+	if provider != "" {
+		data["provider"] = provider
+	}
+
+	return data
 }

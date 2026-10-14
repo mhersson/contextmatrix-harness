@@ -189,6 +189,7 @@ type Response struct {
 	ToolCalls    []ToolCall
 	FinishReason string
 	Model        string // model actually used (after fallback)
+	Provider     string // upstream provider that served the call, as reported by the gateway (OpenRouter); empty when not reported
 	Usage        Usage
 }
 
