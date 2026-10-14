@@ -51,7 +51,7 @@ func TestRunEmitsProviderOnModelEvents(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, _, transcript, err := runEmpty(t, []llm.Response{
+			_, _, transcript, err := runScripted(t, []llm.Response{
 				{Content: "done", FinishReason: "stop", Provider: tt.provider},
 			}, Config{})
 			require.NoError(t, err)

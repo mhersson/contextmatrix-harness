@@ -31,7 +31,7 @@ func retryEvents(t *testing.T, transcript string) []events.Event {
 	return out
 }
 
-func runEmpty(t *testing.T, responses []llm.Response, cfg Config) (Result, *fakeLLM, string, error) {
+func runScripted(t *testing.T, responses []llm.Response, cfg Config) (Result, *fakeLLM, string, error) {
 	t.Helper()
 
 	f := &fakeLLM{responses: responses}
@@ -49,7 +49,7 @@ func runEmpty(t *testing.T, responses []llm.Response, cfg Config) (Result, *fake
 }
 
 func TestRunEmptyReplyThenAnswerCompletes(t *testing.T) {
-	res, f, tr, err := runEmpty(t, []llm.Response{emptyReply(), {Content: "answer", FinishReason: "stop"}}, Config{})
+	res, f, tr, err := runScripted(t, []llm.Response{emptyReply(), {Content: "answer", FinishReason: "stop"}}, Config{})
 	require.NoError(t, err)
 	assert.True(t, res.Completed)
 	assert.Equal(t, "done", res.Reason)
@@ -61,15 +61,19 @@ func TestRunEmptyReplyThenAnswerCompletes(t *testing.T) {
 	assert.EqualValues(t, 1, retries[0].Data["retry"])
 	assert.EqualValues(t, 1, retries[0].Data["turn"])
 
+	var assistant []string
+
 	for _, m := range res.Messages {
 		if m.Role == "assistant" {
-			assert.Equal(t, "answer", m.Content)
+			assistant = append(assistant, m.Content)
 		}
 	}
+
+	assert.Equal(t, []string{"answer"}, assistant)
 }
 
 func TestRunEmptyRepliesExhaustRetriesAndFail(t *testing.T) {
-	res, f, tr, err := runEmpty(t, []llm.Response{emptyReply(), emptyReply(), emptyReply(), {Content: "late", FinishReason: "stop"}}, Config{})
+	res, f, tr, err := runScripted(t, []llm.Response{emptyReply(), emptyReply(), emptyReply(), {Content: "late", FinishReason: "stop"}}, Config{})
 	require.ErrorIs(t, err, ErrEmptyResponse)
 	assert.False(t, res.Completed)
 	assert.Equal(t, "error", res.Reason)
@@ -105,7 +109,7 @@ func TestRunEmptyReplyClassification(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			res, _, tr, err := runEmpty(t, []llm.Response{tt.first}, Config{})
+			res, _, tr, err := runScripted(t, []llm.Response{tt.first}, Config{})
 			require.NoError(t, err)
 			assert.True(t, res.Completed)
 			assert.Equal(t, "done", res.Reason)
@@ -133,7 +137,7 @@ func TestRunEmptyCountResetsAfterNonEmptyReply(t *testing.T) {
 	// Two empties, a tool turn, then two more empties: without the reset the
 	// fourth empty would exceed the budget.
 	call := llm.Response{ToolCalls: []llm.ToolCall{toolCall("1", "read", `{"path":"missing"}`)}}
-	res, _, tr, err := runEmpty(t, []llm.Response{
+	res, _, tr, err := runScripted(t, []llm.Response{
 		emptyReply(), emptyReply(), call, emptyReply(), emptyReply(), {Content: "fin", FinishReason: "stop"},
 	}, Config{})
 	require.NoError(t, err)
@@ -146,7 +150,7 @@ func TestRunEmptyCountResetsAfterNonEmptyReply(t *testing.T) {
 }
 
 func TestRunEmptyRepliesStopAtCostCap(t *testing.T) {
-	res, f, _, err := runEmpty(t, []llm.Response{emptyReply(), emptyReply(), emptyReply()}, Config{MaxCostUSD: 0.3})
+	res, f, _, err := runScripted(t, []llm.Response{emptyReply(), emptyReply(), emptyReply()}, Config{MaxCostUSD: 0.3})
 	require.NoError(t, err)
 	assert.Equal(t, "max_cost", res.Reason)
 	assert.False(t, res.Completed)
@@ -159,7 +163,7 @@ func TestInteractiveEmptyRepliesAwaitInputWithFreshBudget(t *testing.T) {
 		closeErr:           ErrInboxClosed,
 		deliverViaWaitOnly: true,
 	}
-	res, f, tr, err := runEmpty(t, []llm.Response{
+	res, f, tr, err := runScripted(t, []llm.Response{
 		emptyReply(), emptyReply(), emptyReply(), emptyReply(), {Content: "recovered", FinishReason: "stop"},
 	}, Config{Interactive: true, Inbox: inbox})
 	require.NoError(t, err)
@@ -176,4 +180,33 @@ func TestInteractiveEmptyRepliesAwaitInputWithFreshBudget(t *testing.T) {
 	assert.True(t, sawError)
 	// Fresh budget after the human message: 2 retries before the failure, 1 after.
 	assert.Len(t, retryEvents(t, tr), 3)
+}
+
+func TestRunEmptyReplyAtContextLimitStopsWithoutRetry(t *testing.T) {
+	r := emptyReply()
+	r.Usage.PromptTokens = 900
+	res, f, tr, err := runScripted(t, []llm.Response{r, {Content: "late", FinishReason: "stop"}}, Config{ContextWindow: 1000})
+	require.NoError(t, err)
+	assert.Equal(t, "context_limit", res.Reason)
+	assert.Equal(t, 1, f.i)
+	assert.Empty(t, retryEvents(t, tr))
+}
+
+func TestRunEmptyReplyOverCompactionThresholdCompacts(t *testing.T) {
+	history := make([]llm.Message, 20)
+	for i := range history {
+		history[i] = llm.Message{Role: "user", Content: "m"}
+	}
+
+	r := emptyReply()
+	r.Usage.PromptTokens = 900
+	res, _, tr, err := runScripted(t, []llm.Response{r, {Content: "SUMMARY"}, {Content: "final", FinishReason: "stop"}}, Config{
+		ContextWindow: 1000,
+		Compaction:    &Compaction{Threshold: 0.85, KeepRecentTurns: 2},
+		History:       history,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "done", res.Reason)
+	assert.Equal(t, "final", res.Output)
+	assert.Empty(t, retryEvents(t, tr))
 }

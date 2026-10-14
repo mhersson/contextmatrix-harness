@@ -83,7 +83,7 @@ type Config struct {
 	IncapableThreshold int                 // consecutive unproductive turns before "incapable"; 0 → default 3
 	History            []llm.Message       // prior conversation to seed before the initial task message; nil = unchanged behavior
 	Compaction         *Compaction         // nil = hard context_limit stop (v1 behavior); non-nil = in-window compaction
-	Interactive        bool                // true = unbounded turns; incapable/transport errors await next input instead of terminating (requires Inbox)
+	Interactive        bool                // true = unbounded turns; incapable, transport and empty-reply errors await next input instead of terminating (requires Inbox)
 	// OnDelta receives each streamed content or reasoning fragment as it
 	// arrives, synchronously on the Run goroutine, so a caller can surface
 	// progress during a long turn. nil = no callback. Fragments are raw model
@@ -214,7 +214,8 @@ func redactStr(cfg Config, s string) string {
 }
 
 // Run drives the bare agent loop: model call → tool dispatch → repeat, until the
-// model emits no tool calls (done) or a cap trips. FSM-free; no orchestration.
+// model emits a non-empty reply with no tool calls (done), an empty reply
+// outlasts its retries (error), or a cap trips. FSM-free; no orchestration.
 func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.Emitter, task string, cfg Config) (res Result, err error) {
 	var msgs []llm.Message
 
@@ -351,60 +352,9 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 				// existing prompt_tokens field.
 				"wire_prompt_tokens": resp.Usage.PromptTokens,
 			}, resp.Provider))
-
-			if isEmptyResponse(resp) {
-				emptyRun++
-				if emptyRun <= maxEmptyResponseRetries {
-					emit.Emit(events.StateChange, map[string]any{"event": "empty_response_retry", "turn": res.Turns, "retry": emptyRun})
-
-					continue
-				}
-
-				err = fmt.Errorf("harness: %d consecutive empty model replies: %w", emptyRun, ErrEmptyResponse)
-			} else {
-				emptyRun = 0
-			}
 		}
 
-		if err != nil {
-			// Transport errors embed the provider response body (llm/client.go),
-			// so this emit goes through the same redaction and size cap as every
-			// other content-bearing emit. The returned err stays raw for the caller.
-			emit.Emit(events.ErrorKind, map[string]any{
-				"error": tools.HeadTail(redactStr(cfg, err.Error()), cfg.ToolOutputMaxBytes),
-			})
-
-			emptyRun = 0
-
-			if cfg.Interactive {
-				var (
-					outcome  string
-					awaitErr error
-				)
-
-				msgs, outcome, awaitErr = awaitNext(ctx, cfg, msgs, emit, res.Turns)
-				switch outcome {
-				case "continue":
-					continue
-				case "done":
-					res.Completed = true
-					res.Reason = "done"
-					emit.Emit(events.StateChange, map[string]any{"stop": "done", "turns": res.Turns})
-
-					return res, nil
-				default: // "canceled"
-					res.Reason = "canceled"
-
-					return res, awaitErr
-				}
-			}
-
-			res.Reason = "error"
-
-			return res, err
-		}
-
-		if cfg.ContextWindow > 0 {
+		if err == nil && cfg.ContextWindow > 0 {
 			if cfg.Compaction != nil {
 				if resp.Usage.PromptTokens >= effectiveCompactionThreshold(cfg.ContextWindow, cfg.Compaction.Threshold) {
 					newMsgs, cResp, cerr := compact(ctx, client, cfg, msgs, cfg.Compaction.KeepRecentTurns, emit)
@@ -477,6 +427,59 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 
 				return res, nil
 			}
+		}
+
+		if err == nil {
+			if isEmptyResponse(resp) {
+				emptyRun++
+				if emptyRun <= maxEmptyResponseRetries {
+					emit.Emit(events.StateChange, map[string]any{"event": "empty_response_retry", "turn": res.Turns, "retry": emptyRun})
+
+					continue
+				}
+
+				err = fmt.Errorf("%d consecutive empty model replies: %w", emptyRun, ErrEmptyResponse)
+			} else {
+				emptyRun = 0
+			}
+		}
+
+		if err != nil {
+			// Transport errors embed the provider response body (llm/client.go),
+			// so this emit goes through the same redaction and size cap as every
+			// other content-bearing emit. The returned err stays raw for the caller.
+			emit.Emit(events.ErrorKind, map[string]any{
+				"error": tools.HeadTail(redactStr(cfg, err.Error()), cfg.ToolOutputMaxBytes),
+			})
+
+			emptyRun = 0
+
+			if cfg.Interactive {
+				var (
+					outcome  string
+					awaitErr error
+				)
+
+				msgs, outcome, awaitErr = awaitNext(ctx, cfg, msgs, emit, res.Turns)
+				switch outcome {
+				case "continue":
+					continue
+				case "done":
+					res.Completed = true
+					res.Reason = "done"
+					emit.Emit(events.StateChange, map[string]any{"stop": "done", "turns": res.Turns})
+
+					return res, nil
+				default: // "canceled"
+					res.Reason = "canceled"
+
+					return res, awaitErr
+				}
+			}
+
+			res.Reason = "error"
+
+			return res, err
 		}
 
 		msgs = append(msgs, llm.Message{Role: "assistant", Content: resp.Content, ToolCalls: resp.ToolCalls})
@@ -810,7 +813,7 @@ func drainInbox(cfg Config, msgs []llm.Message, emit *events.Emitter) []llm.Mess
 }
 
 // awaitNext blocks for the next user message after a non-terminal stop
-// (incapable or transport error) in interactive mode. It returns the
+// (incapable, transport or empty-reply error) in interactive mode. It returns the
 // extended msgs and an outcome: "continue" (a message arrived; appended),
 // "done" (inbox closed), or "canceled" (ctx error).
 func awaitNext(ctx context.Context, cfg Config, msgs []llm.Message, emit *events.Emitter, turn int) ([]llm.Message, string, error) {

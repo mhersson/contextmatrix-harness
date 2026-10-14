@@ -1515,7 +1515,7 @@ type pushOnStreamLLM struct {
 }
 
 func (f *pushOnStreamLLM) Send(context.Context, llm.Request) (llm.Response, error) {
-	return llm.Response{FinishReason: "stop"}, nil
+	return llm.Response{Content: "done", FinishReason: "stop"}, nil
 }
 
 func (f *pushOnStreamLLM) SendStream(_ context.Context, req llm.Request, _ func(llm.Delta)) (llm.Response, error) {
@@ -1530,7 +1530,7 @@ func (f *pushOnStreamLLM) SendStream(_ context.Context, req llm.Request, _ func(
 		return f.responses[f.i-1], nil
 	}
 
-	return llm.Response{FinishReason: "stop"}, nil
+	return llm.Response{Content: "done", FinishReason: "stop"}, nil
 }
 
 func TestIncapableRecoveryDeliversStashedInterjection(t *testing.T) {
