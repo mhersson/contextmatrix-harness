@@ -259,6 +259,46 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 	batchNudged := false
 	singleBatchTurns := 0
 
+	// failTurn ends a turn on a transport or empty-reply error. It reports false
+	// when an interactive run got new input and the loop should continue.
+	failTurn := func(err error) (bool, error) {
+		// Transport errors embed the provider response body (llm/client.go),
+		// so this emit goes through the same redaction and size cap as every
+		// other content-bearing emit. The returned err stays raw for the caller.
+		emit.Emit(events.ErrorKind, map[string]any{
+			"error": tools.HeadTail(redactStr(cfg, err.Error()), cfg.ToolOutputMaxBytes),
+		})
+
+		emptyRun = 0
+
+		if cfg.Interactive {
+			var (
+				outcome  string
+				awaitErr error
+			)
+
+			msgs, outcome, awaitErr = awaitNext(ctx, cfg, msgs, emit, res.Turns)
+			switch outcome {
+			case "continue":
+				return false, nil
+			case "done":
+				res.Completed = true
+				res.Reason = "done"
+				emit.Emit(events.StateChange, map[string]any{"stop": "done", "turns": res.Turns})
+
+				return true, nil
+			default: // "canceled"
+				res.Reason = "canceled"
+
+				return true, awaitErr
+			}
+		}
+
+		res.Reason = "error"
+
+		return true, err
+	}
+
 	// MaxTurns>0 per-exchange backstop in interactive mode is deferred;
 	// chat uses MaxTurns=0 (unbounded). Non-interactive behavior is byte-identical.
 	for cfg.Interactive || res.Turns < cfg.MaxTurns {
@@ -313,48 +353,54 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 		emit.Emit(events.ModelRequest, map[string]any{"turn": res.Turns, "model": cfg.Model, "messages": len(msgs)})
 
 		resp, err := client.SendStream(ctx, req, cfg.OnDelta)
-		if err == nil {
-			prompt, cacheRead, cacheCreation := resp.Usage.Buckets()
-
-			res.TotalCostUSD += resp.Usage.Cost
-			res.PromptTokens += int64(prompt)
-			res.CompletionTokens += int64(resp.Usage.CompletionTokens)
-			res.CacheReadTokens += int64(cacheRead)
-			res.CacheCreationTokens += int64(cacheCreation)
-
-			if resp.Model != "" {
-				res.ModelUsed = resp.Model
+		if err != nil {
+			if stop, ferr := failTurn(err); stop {
+				return res, ferr
 			}
 
-			res.Output = resp.Content
-
-			if resp.Reasoning != "" {
-				emit.Emit(events.Thinking, map[string]any{"turn": res.Turns, "content": redactStr(cfg, resp.Reasoning)})
-			}
-
-			emit.Emit(events.ModelResponse, withProvider(map[string]any{
-				"turn": res.Turns, "finish_reason": resp.FinishReason,
-				"tool_calls": len(resp.ToolCalls), "content_len": len(resp.Content),
-				"content": redactStr(cfg, resp.Content), "model": cfg.Model,
-			}, resp.Provider))
-			// The three token counts are the disjoint buckets Result accumulates, so a
-			// transcript sums to the same totals the run reports: prompt excludes the
-			// cached portion rather than overlapping cache_read_tokens.
-			emit.Emit(events.UsageKind, withProvider(map[string]any{
-				"prompt_tokens": prompt, "completion_tokens": resp.Usage.CompletionTokens,
-				"cost_usd": resp.Usage.Cost, "model": cfg.Model,
-				"cache_read_tokens": cacheRead, "cache_creation_tokens": cacheCreation,
-				// wire_prompt_tokens is the raw pre-normalization wire value
-				// (Usage.PromptTokens, untouched by Buckets()): equal to
-				// prompt_tokens on an already-disjoint wire, larger when the
-				// subset subtraction ran. Makes rows self-describing across a
-				// mixed-version fleet without changing the meaning of the
-				// existing prompt_tokens field.
-				"wire_prompt_tokens": resp.Usage.PromptTokens,
-			}, resp.Provider))
+			continue
 		}
 
-		if err == nil && cfg.ContextWindow > 0 {
+		prompt, cacheRead, cacheCreation := resp.Usage.Buckets()
+
+		res.TotalCostUSD += resp.Usage.Cost
+		res.PromptTokens += int64(prompt)
+		res.CompletionTokens += int64(resp.Usage.CompletionTokens)
+		res.CacheReadTokens += int64(cacheRead)
+		res.CacheCreationTokens += int64(cacheCreation)
+
+		if resp.Model != "" {
+			res.ModelUsed = resp.Model
+		}
+
+		res.Output = resp.Content
+
+		if resp.Reasoning != "" {
+			emit.Emit(events.Thinking, map[string]any{"turn": res.Turns, "content": redactStr(cfg, resp.Reasoning)})
+		}
+
+		emit.Emit(events.ModelResponse, withProvider(map[string]any{
+			"turn": res.Turns, "finish_reason": resp.FinishReason,
+			"tool_calls": len(resp.ToolCalls), "content_len": len(resp.Content),
+			"content": redactStr(cfg, resp.Content), "model": cfg.Model,
+		}, resp.Provider))
+		// The three token counts are the disjoint buckets Result accumulates, so a
+		// transcript sums to the same totals the run reports: prompt excludes the
+		// cached portion rather than overlapping cache_read_tokens.
+		emit.Emit(events.UsageKind, withProvider(map[string]any{
+			"prompt_tokens": prompt, "completion_tokens": resp.Usage.CompletionTokens,
+			"cost_usd": resp.Usage.Cost, "model": cfg.Model,
+			"cache_read_tokens": cacheRead, "cache_creation_tokens": cacheCreation,
+			// wire_prompt_tokens is the raw pre-normalization wire value
+			// (Usage.PromptTokens, untouched by Buckets()): equal to
+			// prompt_tokens on an already-disjoint wire, larger when the
+			// subset subtraction ran. Makes rows self-describing across a
+			// mixed-version fleet without changing the meaning of the
+			// existing prompt_tokens field.
+			"wire_prompt_tokens": resp.Usage.PromptTokens,
+		}, resp.Provider))
+
+		if cfg.ContextWindow > 0 {
 			if cfg.Compaction != nil {
 				if resp.Usage.PromptTokens >= effectiveCompactionThreshold(cfg.ContextWindow, cfg.Compaction.Threshold) {
 					newMsgs, cResp, cerr := compact(ctx, client, cfg, msgs, cfg.Compaction.KeepRecentTurns, emit)
@@ -430,58 +476,22 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 			}
 		}
 
-		if err == nil {
-			if isEmptyResponse(resp) {
-				emptyRun++
-				if emptyRun <= maxEmptyResponseRetries {
-					emit.Emit(events.StateChange, map[string]any{"event": "empty_response_retry", "turn": res.Turns, "retry": emptyRun})
+		if isEmptyResponse(resp) {
+			emptyRun++
+			if emptyRun <= maxEmptyResponseRetries {
+				emit.Emit(events.StateChange, map[string]any{"event": "empty_response_retry", "turn": res.Turns, "retry": emptyRun})
 
-					continue
-				}
-
-				err = fmt.Errorf("%w after %d consecutive replies", ErrEmptyResponse, emptyRun)
-			} else {
-				emptyRun = 0
-			}
-		}
-
-		if err != nil {
-			// Transport errors embed the provider response body (llm/client.go),
-			// so this emit goes through the same redaction and size cap as every
-			// other content-bearing emit. The returned err stays raw for the caller.
-			emit.Emit(events.ErrorKind, map[string]any{
-				"error": tools.HeadTail(redactStr(cfg, err.Error()), cfg.ToolOutputMaxBytes),
-			})
-
-			emptyRun = 0
-
-			if cfg.Interactive {
-				var (
-					outcome  string
-					awaitErr error
-				)
-
-				msgs, outcome, awaitErr = awaitNext(ctx, cfg, msgs, emit, res.Turns)
-				switch outcome {
-				case "continue":
-					continue
-				case "done":
-					res.Completed = true
-					res.Reason = "done"
-					emit.Emit(events.StateChange, map[string]any{"stop": "done", "turns": res.Turns})
-
-					return res, nil
-				default: // "canceled"
-					res.Reason = "canceled"
-
-					return res, awaitErr
-				}
+				continue
 			}
 
-			res.Reason = "error"
+			if stop, ferr := failTurn(fmt.Errorf("%w after %d consecutive replies", ErrEmptyResponse, emptyRun)); stop {
+				return res, ferr
+			}
 
-			return res, err
+			continue
 		}
+
+		emptyRun = 0
 
 		msgs = append(msgs, llm.Message{Role: "assistant", Content: resp.Content, ToolCalls: resp.ToolCalls})
 
