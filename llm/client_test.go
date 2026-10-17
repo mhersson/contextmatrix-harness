@@ -308,6 +308,11 @@ func TestSendStreamResetPrecedesReplay(t *testing.T) {
 			want:     []Delta{{Content: "Hel"}, {Reset: true}, {Content: "Hel"}, {Reset: true}, {Content: "Hello"}},
 		},
 		{
+			name:     "replay that fails before any fragment sends no second reset",
+			attempts: []string{partial + fail, fail, done},
+			want:     []Delta{{Content: "Hel"}, {Reset: true}, {Content: "Hello"}},
+		},
+		{
 			name:     "failure before any fragment",
 			attempts: []string{fail, done},
 			want:     []Delta{{Content: "Hello"}},

@@ -224,6 +224,18 @@ func TestParseStreamToolCallDeltas(t *testing.T) {
 			},
 		},
 		{
+			name: "id alone emits before the name",
+			lines: []string{
+				`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"a"}]}}]}`,
+				`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"read","arguments":"{}"}}]}}]}`,
+				`data: [DONE]`,
+			},
+			want: []Delta{
+				{ToolCall: &ToolCallDelta{Index: 0, ID: "a"}},
+				{ToolCall: &ToolCallDelta{Index: 0, ID: "a", Name: "read", ArgsFragment: `{}`}},
+			},
+		},
+		{
 			name: "content in the same chunk comes first",
 			lines: []string{
 				`data: {"choices":[{"delta":{"content":"Writing.","tool_calls":[{"index":0,"id":"a","function":{"name":"submit_artifact","arguments":"{"}}]}}]}`,
