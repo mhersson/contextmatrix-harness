@@ -201,6 +201,9 @@ type Delta struct {
 	// ToolCall is set when a structured tool call gains an id, a name or an
 	// argument fragment. Harmony-format calls arrive as Content instead.
 	ToolCall *ToolCallDelta
+	// Reset voids every fragment this SendStream call delivered so far: the
+	// stream failed mid-read and is replayed from the start.
+	Reset bool
 }
 
 // ToolCallDelta is one step of a streamed tool call. ID and Name are the
