@@ -56,7 +56,7 @@ type apiError struct {
 // (the name may arrive in a later frame than id/arguments), captures usage from
 // the final frame, surfaces mid-stream error frames as an error, and rejects a
 // stream that ends without [DONE] or a terminal finish_reason. onDelta
-// (nullable) receives incremental content/reasoning.
+// (nullable) receives incremental content, reasoning and tool-call fragments.
 func parseStream(r io.Reader, onDelta func(Delta)) (Response, error) {
 	return parseStreamWithLimit(r, onDelta, maxSSELine)
 }
@@ -152,6 +152,12 @@ func parseStreamWithLimit(r io.Reader, onDelta func(Delta), maxLine int) (Respon
 					order = append(order, tc.Index)
 				}
 
+				// Gateways may repeat the id and name on every chunk; only a new
+				// id, a new name or an argument fragment is worth a delta.
+				changed := tc.Function.Arguments != "" ||
+					(tc.ID != "" && tc.ID != cur.ID) ||
+					(tc.Function.Name != "" && tc.Function.Name != cur.Function.Name)
+
 				if tc.ID != "" {
 					cur.ID = tc.ID
 				}
@@ -172,6 +178,15 @@ func parseStreamWithLimit(r io.Reader, onDelta func(Delta), maxLine int) (Respon
 					}
 
 					ab.WriteString(tc.Function.Arguments)
+				}
+
+				if onDelta != nil && changed {
+					onDelta(Delta{ToolCall: &ToolCallDelta{
+						Index:        tc.Index,
+						ID:           cur.ID,
+						Name:         cur.Function.Name,
+						ArgsFragment: tc.Function.Arguments,
+					}})
 				}
 			}
 		}
