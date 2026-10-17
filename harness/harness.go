@@ -87,9 +87,11 @@ type Config struct {
 	// OnDelta receives each streamed content, reasoning or tool-call fragment
 	// as it arrives, and a Reset before a mid-stream replay, synchronously on
 	// the Run goroutine, so a caller can surface progress during a long turn.
-	// nil = no callback. Fragments are raw model output: RedactToolOutput is
-	// not applied and a secret can span fragments, so a caller that persists
-	// or prints them must redact them itself.
+	// nil = no callback. Reset covers one model call only: a turn the harness
+	// abandons (a failed call, a compaction discard) sends none, and tool-call
+	// indexes restart with each call. Fragments are raw model output:
+	// RedactToolOutput is not applied and a secret can span fragments, so a
+	// caller that persists or prints them must redact them itself.
 	OnDelta func(llm.Delta)
 	// WrapUpTurns, when > 0, injects WrapUpMessage as a synthetic user message
 	// exactly once, at the top of the turn whose start leaves WrapUpTurns turns
