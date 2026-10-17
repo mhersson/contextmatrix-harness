@@ -171,3 +171,119 @@ func TestParseStreamProvider(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "DeepInfra", resp.Provider)
 }
+
+func TestParseStreamToolCallDeltas(t *testing.T) {
+	tests := []struct {
+		name  string
+		lines []string
+		want  []Delta
+	}{
+		{
+			name: "interleaved parallel calls keep index and id",
+			lines: []string{
+				`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"a","type":"function","function":{"name":"submit_artifact","arguments":""}}]}}]}`,
+				`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"bo"}}]}}]}`,
+				`data: {"choices":[{"delta":{"tool_calls":[{"index":1,"id":"b","function":{"name":"read","arguments":"{}"}}]}}]}`,
+				`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"dy\":\"x\"}"}}]}}]}`,
+				`data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`,
+				`data: [DONE]`,
+			},
+			want: []Delta{
+				{ToolCall: &ToolCallDelta{Index: 0, ID: "a", Name: "submit_artifact"}},
+				{ToolCall: &ToolCallDelta{Index: 0, ID: "a", Name: "submit_artifact", ArgsFragment: `{"bo`}},
+				{ToolCall: &ToolCallDelta{Index: 1, ID: "b", Name: "read", ArgsFragment: `{}`}},
+				{ToolCall: &ToolCallDelta{Index: 0, ID: "a", Name: "submit_artifact", ArgsFragment: `dy":"x"}`}},
+			},
+		},
+		{
+			name: "name after the first fragment",
+			lines: []string{
+				`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"arguments":"{\"pa"}}]}}]}`,
+				`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"read"}}]}}]}`,
+				`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"th\":\"x\"}"}}]}}]}`,
+				`data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`,
+				`data: [DONE]`,
+			},
+			want: []Delta{
+				{ToolCall: &ToolCallDelta{Index: 0, ID: "call_1", ArgsFragment: `{"pa`}},
+				{ToolCall: &ToolCallDelta{Index: 0, ID: "call_1", Name: "read"}},
+				{ToolCall: &ToolCallDelta{Index: 0, ID: "call_1", Name: "read", ArgsFragment: `th":"x"}`}},
+			},
+		},
+		{
+			name: "repeated id and name emit once",
+			lines: []string{
+				`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"a","function":{"name":"read"}}]}}]}`,
+				`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"a","function":{"name":"read"}}]}}]}`,
+				`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"a","function":{"name":"read","arguments":"{}"}}]}}]}`,
+				`data: [DONE]`,
+			},
+			want: []Delta{
+				{ToolCall: &ToolCallDelta{Index: 0, ID: "a", Name: "read"}},
+				{ToolCall: &ToolCallDelta{Index: 0, ID: "a", Name: "read", ArgsFragment: `{}`}},
+			},
+		},
+		{
+			name: "id alone emits before the name",
+			lines: []string{
+				`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"a"}]}}]}`,
+				`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"read","arguments":"{}"}}]}}]}`,
+				`data: [DONE]`,
+			},
+			want: []Delta{
+				{ToolCall: &ToolCallDelta{Index: 0, ID: "a"}},
+				{ToolCall: &ToolCallDelta{Index: 0, ID: "a", Name: "read", ArgsFragment: `{}`}},
+			},
+		},
+		{
+			name: "content in the same chunk comes first",
+			lines: []string{
+				`data: {"choices":[{"delta":{"content":"Writing.","tool_calls":[{"index":0,"id":"a","function":{"name":"submit_artifact","arguments":"{"}}]}}]}`,
+				`data: [DONE]`,
+			},
+			want: []Delta{
+				{Content: "Writing."},
+				{ToolCall: &ToolCallDelta{Index: 0, ID: "a", Name: "submit_artifact", ArgsFragment: "{"}},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got []Delta
+
+			sse := strings.Join(tt.lines, "\n") + "\n"
+			resp, err := parseStream(strings.NewReader(sse), func(d Delta) { got = append(got, d) })
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+
+			frags := map[string]string{}
+
+			for _, d := range got {
+				if d.ToolCall != nil {
+					frags[d.ToolCall.ID] += d.ToolCall.ArgsFragment
+				}
+			}
+
+			for _, tc := range resp.ToolCalls {
+				assert.Equal(t, tc.Function.Arguments, frags[tc.ID], "fragments rebuild the arguments of %s", tc.ID)
+			}
+		})
+	}
+}
+
+func TestParseStreamTextOnlyDeltas(t *testing.T) {
+	sse := strings.Join([]string{
+		`data: {"choices":[{"delta":{"reasoning":"Let me"}}]}`,
+		`data: {"choices":[{"delta":{"reasoning_content":" see."}}]}`,
+		`data: {"choices":[{"delta":{"content":"Hel"}}]}`,
+		`data: {"choices":[{"delta":{"content":"lo"},"finish_reason":"stop"}]}`,
+		`data: [DONE]`,
+	}, "\n") + "\n"
+
+	var got []Delta
+
+	_, err := parseStream(strings.NewReader(sse), func(d Delta) { got = append(got, d) })
+	require.NoError(t, err)
+	assert.Equal(t, []Delta{{Reasoning: "Let me"}, {Reasoning: " see."}, {Content: "Hel"}, {Content: "lo"}}, got)
+}

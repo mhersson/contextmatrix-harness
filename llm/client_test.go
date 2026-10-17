@@ -286,3 +286,60 @@ func TestClientSendParsesProvider(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "DeepInfra", resp.Provider)
 }
+
+func TestSendStreamResetPrecedesReplay(t *testing.T) {
+	partial := `data: {"choices":[{"delta":{"content":"Hel"}}]}` + "\n"
+	fail := `data: {"error":{"message":"Upstream idle timeout exceeded"}}` + "\n"
+	done := `data: {"choices":[{"delta":{"content":"Hello"},"finish_reason":"stop"}]}` + "\n" + `data: [DONE]` + "\n"
+
+	tests := []struct {
+		name     string
+		attempts []string
+		want     []Delta
+	}{
+		{
+			name:     "failed attempt with fragments",
+			attempts: []string{partial + fail, done},
+			want:     []Delta{{Content: "Hel"}, {Reset: true}, {Content: "Hello"}},
+		},
+		{
+			name:     "one reset per replay",
+			attempts: []string{partial + fail, partial + fail, done},
+			want:     []Delta{{Content: "Hel"}, {Reset: true}, {Content: "Hel"}, {Reset: true}, {Content: "Hello"}},
+		},
+		{
+			name:     "replay that fails before any fragment sends no second reset",
+			attempts: []string{partial + fail, fail, done},
+			want:     []Delta{{Content: "Hel"}, {Reset: true}, {Content: "Hello"}},
+		},
+		{
+			name:     "failure before any fragment",
+			attempts: []string{fail, done},
+			want:     []Delta{{Content: "Hello"}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var requests atomic.Int32
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				n := int(requests.Add(1))
+
+				w.Header().Set("Content-Type", "text/event-stream")
+				io.WriteString(w, tt.attempts[min(n, len(tt.attempts))-1]) //nolint:errcheck
+			}))
+			defer srv.Close()
+
+			c := NewClient("k", WithBaseURL(srv.URL),
+				WithRetry(RetryPolicy{MaxRetries: 2, BaseDelay: time.Millisecond}))
+
+			var got []Delta
+
+			resp, err := c.SendStream(context.Background(), Request{Model: "m"}, func(d Delta) { got = append(got, d) })
+			require.NoError(t, err)
+			assert.Equal(t, "Hello", resp.Content)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}

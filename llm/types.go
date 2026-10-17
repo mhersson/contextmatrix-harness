@@ -193,10 +193,27 @@ type Response struct {
 	Usage        Usage
 }
 
-// Delta is an incremental streaming fragment for live display.
+// Delta is one incremental streaming event for live display; exactly one
+// field is set.
 type Delta struct {
 	Content   string
 	Reasoning string
+	// ToolCall is set when a structured tool call gains an id, a name or an
+	// argument fragment. Harmony-format calls arrive as Content instead.
+	ToolCall *ToolCallDelta
+	// Reset voids every fragment this SendStream call delivered so far: the
+	// stream failed mid-read and is replayed from the start.
+	Reset bool
+}
+
+// ToolCallDelta is one step of a streamed tool call. ID and Name are the
+// latest values seen for Index: a provider may send the name after the first
+// argument fragments.
+type ToolCallDelta struct {
+	Index        int
+	ID           string
+	Name         string
+	ArgsFragment string
 }
 
 // LLM is the narrow interface the harness depends on.

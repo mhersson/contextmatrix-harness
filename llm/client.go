@@ -58,12 +58,23 @@ func (c *Client) SendStream(ctx context.Context, req Request, onDelta func(Delta
 
 	var lastErr error
 
+	delivered := false
+	deliver := onDelta
+
+	if onDelta != nil {
+		deliver = func(d Delta) {
+			delivered = true
+
+			onDelta(d)
+		}
+	}
+
 	// Stream-phase retry: doWithRetry covers connect-time failures, but a
 	// stream that opened cleanly can still die mid-read (in-band error
 	// frames - gateway idle timeouts - transport resets, decode errors).
-	// The request is stateless, so each attempt re-sends it whole; deltas
-	// already delivered from a failed attempt may repeat, which callers
-	// accept as cosmetic. ctx errors are never retried.
+	// The request is stateless, so each attempt re-sends it whole; when the
+	// failed attempt delivered deltas, a Reset delta precedes the replay so
+	// callers drop what they built from them. ctx errors are never retried.
 	for attempt := range attempts {
 		if attempt > 0 {
 			slog.Warn("llm: stream failed; retrying", "attempt", attempt, "error", lastErr)
@@ -95,7 +106,13 @@ func (c *Client) SendStream(ctx context.Context, req Request, onDelta func(Delta
 			body = newStallReader(hr.Body, c.stall)
 		}
 
-		resp, perr := parseStream(body, onDelta)
+		if delivered {
+			onDelta(Delta{Reset: true})
+
+			delivered = false
+		}
+
+		resp, perr := parseStream(body, deliver)
 		_ = body.Close() //nolint:errcheck
 
 		if perr == nil {
