@@ -37,6 +37,7 @@ type SubagentOpts struct {
 	ExtraReadOnlyTools []tools.Tool        // appended to tools.ReadOnlyTools; must be side-effect-free (e.g. the Skill tool)
 	Provider           json.RawMessage     // OpenRouter provider routing inherited by children; nil = default selection
 	Reasoning          json.RawMessage     // reasoning config inherited by children; nil = none
+	ReplayReasoning    bool                // reasoning replay inherited by children; see Config.ReplayReasoning
 }
 
 // SpawnSubagents runs specs as parallel child Harness.Run calls over the shared
@@ -73,6 +74,7 @@ func SpawnSubagents(ctx context.Context, client llm.LLM, root string, emit *even
 					Model:              model,
 					Provider:           opts.Provider,
 					Reasoning:          opts.Reasoning,
+					ReplayReasoning:    opts.ReplayReasoning,
 					MaxTurns:           spec.MaxTurns,
 					ContextWindow:      spec.ContextWindow,
 					ToolOutputMaxBytes: opts.ToolOutputMaxBytes,

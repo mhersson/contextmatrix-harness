@@ -85,6 +85,7 @@ type capturingScriptedLLM struct {
 	tool     string
 	args     string
 	final    string
+	details  string // reasoning_details on the tool-call reply; "" = none
 }
 
 func (c *capturingScriptedLLM) Send(ctx context.Context, req llm.Request) (llm.Response, error) {
@@ -101,7 +102,33 @@ func (c *capturingScriptedLLM) SendStream(_ context.Context, req llm.Request, _ 
 		return llm.Response{Content: c.final, FinishReason: "stop"}, nil
 	}
 
-	return llm.Response{ToolCalls: []llm.ToolCall{toolCall("1", c.tool, c.args)}}, nil
+	resp := llm.Response{ToolCalls: []llm.ToolCall{toolCall("1", c.tool, c.args)}}
+	if c.details != "" {
+		resp.ReasoningDetails = json.RawMessage(c.details)
+	}
+
+	return resp, nil
+}
+
+func TestSpawnSubagentsReplayReasoningPropagates(t *testing.T) {
+	for _, replay := range []bool{false, true} {
+		root := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(root, "f.txt"), []byte("data"), 0o600))
+
+		capt := &capturingScriptedLLM{tool: "read", args: `{"path":"f.txt"}`, final: "ok", details: sigDetails}
+
+		_, err := SpawnSubagents(context.Background(), capt, root, newEmitter(),
+			[]SubagentSpec{{Role: "r", Prompt: "p", MaxTurns: 3}}, SubagentOpts{ReplayReasoning: replay})
+		require.NoError(t, err)
+		require.Len(t, capt.requests, 2)
+
+		got := capt.requests[1].Messages[1].ReasoningDetails
+		if replay {
+			assert.JSONEq(t, sigDetails, string(got))
+		} else {
+			assert.Nil(t, got)
+		}
+	}
 }
 
 // TestSpawnSubagentsRedactPropagates proves that SubagentOpts.RedactToolOutput
