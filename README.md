@@ -74,7 +74,8 @@ error and retries. If the model ends by omission instead, `CompletionArgs` is
 `Config.ReplayReasoning` (off by default) sends each assistant reply's
 `reasoning_details` back verbatim on later requests, on both dialects, and
 `SubagentOpts.ReplayReasoning` passes the choice to children. Off, seeded
-`History` is stripped of them and the wire is unchanged. They are opaque and
+`History` is stripped of them and the wire is unchanged. The compaction
+summarizer never sees them; the kept tail keeps them. They are opaque and
 signed: consumers never modify or redact them, drop them from `History` when
 the model changes, and leave replay off for a model whose upstream rejects the
 field.

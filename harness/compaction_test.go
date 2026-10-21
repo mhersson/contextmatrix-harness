@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -430,4 +431,77 @@ func TestCompactTailStartsWithUser(t *testing.T) {
 			assert.Equal(t, tt.msgs[tt.tailStart:], out[2:], "retained tail must be kept verbatim with the tool group intact")
 		})
 	}
+}
+
+func replayHistory20() []llm.Message {
+	history := make([]llm.Message, 20)
+	for i := range history {
+		if i%2 == 0 {
+			history[i] = llm.Message{Role: "user", Content: fmt.Sprintf("user %d", i)}
+		} else {
+			history[i] = llm.Message{
+				Role:             "assistant",
+				Content:          fmt.Sprintf("assistant %d", i),
+				ReasoningDetails: json.RawMessage(fmt.Sprintf(`[{"type":"reasoning.text","text":"t%d","index":0}]`, i)),
+			}
+		}
+	}
+
+	return history
+}
+
+func TestCompactStripsReasoningFromSummarizerInputOnly(t *testing.T) {
+	fake := &capturingLLMSeq{responses: []llm.Response{
+		{Content: "turn1", Usage: llm.Usage{PromptTokens: 900}}, // triggers compaction
+		{Content: "SUMMARY"},
+		{Content: "done", FinishReason: "stop"},
+	}}
+
+	_, err := Run(context.Background(), fake, tools.NewRegistry(), newEmitter(), "go", Config{
+		MaxTurns: 10, SystemPrompt: "SYS", ContextWindow: 1000,
+		Compaction: &Compaction{Threshold: 0.85, KeepRecentTurns: 3},
+		History:    replayHistory20(), ReplayReasoning: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, fake.requests, 3)
+
+	for _, m := range fake.requests[1].Messages {
+		assert.Nil(t, m.ReasoningDetails, "the summarizer never sees reasoning")
+	}
+
+	var tail *llm.Message
+
+	for i, m := range fake.requests[2].Messages {
+		if m.Content == "assistant 19" {
+			tail = &fake.requests[2].Messages[i]
+		}
+	}
+
+	require.NotNil(t, tail, "assistant 19 is in the kept tail")
+	assert.JSONEq(t, `[{"type":"reasoning.text","text":"t19","index":0}]`, string(tail.ReasoningDetails))
+}
+
+func TestCompactFailureKeepsReasoningAndStopsOnProviderCount(t *testing.T) {
+	fake := &scriptedLLMWithErrors{results: []scriptedCall{
+		{resp: llm.Response{Content: "turn1", Usage: llm.Usage{PromptTokens: 900}}},
+		{err: errors.New("summarize down")},
+	}}
+
+	res, err := Run(context.Background(), fake, tools.NewRegistry(), newEmitter(), "go", Config{
+		MaxTurns: 10, SystemPrompt: "SYS", ContextWindow: 1000,
+		Compaction: &Compaction{Threshold: 0.85, KeepRecentTurns: 3},
+		History:    replayHistory20(), ReplayReasoning: true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "context_limit", res.Reason)
+
+	var withDetails int
+
+	for _, m := range res.Messages {
+		if m.Role == "assistant" && len(m.ReasoningDetails) > 0 {
+			withDetails++
+		}
+	}
+
+	assert.Equal(t, 10, withDetails, "a failed compaction leaves every seeded block in place")
 }
