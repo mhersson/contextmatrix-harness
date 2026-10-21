@@ -16,6 +16,9 @@ type Message struct {
 	ToolCalls    []ToolCall    `json:"tool_calls,omitempty"`
 	ToolCallID   string        `json:"tool_call_id,omitempty"`
 	Name         string        `json:"name,omitempty"`
+	// ReasoningDetails is the provider's reasoning_details array for an
+	// assistant reply, replayed verbatim. It is opaque and signed: never modify it.
+	ReasoningDetails json.RawMessage `json:"reasoning_details,omitempty"`
 }
 
 // MarshalJSON emits `content` as the parts array when ContentParts is set,
@@ -24,17 +27,22 @@ type Message struct {
 // with no tool calls, which emits an explicit `"content":""`: the Chat
 // Completions contract requires assistant content unless tool_calls is
 // present, and strict OpenAI-compatible endpoints reject a bare
-// {"role":"assistant"} on every replay of the history.
+// {"role":"assistant"} on every replay of the history. reasoning_details is
+// emitted only when it is a non-empty JSON array.
 func (m Message) MarshalJSON() ([]byte, error) {
 	type wire struct {
-		Role       string     `json:"role"`
-		Content    any        `json:"content,omitempty"`
-		ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-		ToolCallID string     `json:"tool_call_id,omitempty"`
-		Name       string     `json:"name,omitempty"`
+		Role             string          `json:"role"`
+		Content          any             `json:"content,omitempty"`
+		ToolCalls        []ToolCall      `json:"tool_calls,omitempty"`
+		ReasoningDetails json.RawMessage `json:"reasoning_details,omitempty"`
+		ToolCallID       string          `json:"tool_call_id,omitempty"`
+		Name             string          `json:"name,omitempty"`
 	}
 
-	w := wire{Role: m.Role, ToolCalls: m.ToolCalls, ToolCallID: m.ToolCallID, Name: m.Name}
+	w := wire{
+		Role: m.Role, ToolCalls: m.ToolCalls, ReasoningDetails: replayableDetails(m.ReasoningDetails),
+		ToolCallID: m.ToolCallID, Name: m.Name,
+	}
 	switch {
 	case len(m.ContentParts) > 0:
 		w.Content = m.ContentParts
@@ -127,6 +135,11 @@ type PromptTokensDetails struct {
 	CacheWriteTokens int `json:"cache_write_tokens"`
 }
 
+// CompletionTokensDetails carries the OpenAI-shape completion detail.
+type CompletionTokensDetails struct {
+	ReasoningTokens int `json:"reasoning_tokens"`
+}
+
 type Usage struct {
 	PromptTokens     int     `json:"prompt_tokens"`
 	CompletionTokens int     `json:"completion_tokens"`
@@ -136,11 +149,25 @@ type Usage struct {
 	// (cached_tokens and cache_write_tokens are subsets of prompt_tokens).
 	// Emitted by OpenRouter and OpenAI-native gateways.
 	PromptTokensDetails *PromptTokensDetails `json:"prompt_tokens_details,omitempty"`
+	// CompletionTokensDetails.ReasoningTokens is a subset of completion_tokens,
+	// not a separate bucket. OpenRouter and the endpoint gateway report it, the
+	// gateway only when above 0.
+	CompletionTokensDetails *CompletionTokensDetails `json:"completion_tokens_details,omitempty"`
 	// CacheReadInputTokens / CacheCreationInputTokens are Anthropic-shim
 	// extensions (LiteLLM-style gateways) where cache buckets are DISJOINT
 	// from prompt_tokens. Zero when the gateway does not emit them.
 	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
 	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
+}
+
+// ReasoningTokens returns the reasoning tokens within CompletionTokens, or 0
+// when the provider did not report them.
+func (u Usage) ReasoningTokens() int {
+	if u.CompletionTokensDetails == nil {
+		return 0
+	}
+
+	return u.CompletionTokensDetails.ReasoningTokens
 }
 
 // Buckets normalizes per-token usage into three disjoint buckets: prompt
@@ -184,13 +211,15 @@ func (u Usage) Buckets() (prompt, cacheRead, cacheCreation int) {
 
 // Response is the assembled result of one model call (stream or non-stream).
 type Response struct {
-	Content      string
-	Reasoning    string
-	ToolCalls    []ToolCall
-	FinishReason string
-	Model        string // model actually used (after fallback)
-	Provider     string // upstream provider that served the call, as reported by the gateway (OpenRouter); empty when not reported
-	Usage        Usage
+	Content   string
+	Reasoning string
+	// ReasoningDetails is the reply's replayable reasoning_details array; nil when none.
+	ReasoningDetails json.RawMessage
+	ToolCalls        []ToolCall
+	FinishReason     string
+	Model            string // model actually used (after fallback)
+	Provider         string // upstream provider that served the call, as reported by the gateway (OpenRouter); empty when not reported
+	Usage            Usage
 }
 
 // Delta is one incremental streaming event for live display; exactly one

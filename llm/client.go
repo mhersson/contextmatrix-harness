@@ -269,6 +269,7 @@ func (n nonStreamResponse) toResponse() Response {
 		r.Content = n.Choices[0].Message.Content
 		r.ToolCalls = n.Choices[0].Message.ToolCalls
 		r.FinishReason = n.Choices[0].FinishReason
+		r.ReasoningDetails = replayableDetails(n.Choices[0].Message.ReasoningDetails)
 
 		r.Reasoning = n.Choices[0].Message.Reasoning
 		if r.Reasoning == "" {

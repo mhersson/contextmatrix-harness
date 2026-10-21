@@ -343,3 +343,39 @@ func TestSendStreamResetPrecedesReplay(t *testing.T) {
 		})
 	}
 }
+
+func TestSendCapturesReasoningDetails(t *testing.T) {
+	tests := []struct {
+		name, details, want string // details "" = key absent; want "" = nil
+	}{
+		{"array verbatim", testDetails, testDetails},
+		{"null", "null", ""},
+		{"empty array", "[]", ""},
+		{"absent", "", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := `{"role":"assistant","content":"hi"`
+			if tt.details != "" {
+				msg += `,"reasoning_details":` + tt.details
+			}
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				io.WriteString(w, `{"model":"m","choices":[{"finish_reason":"stop","message":`+msg+`}}]}`) //nolint:errcheck
+			}))
+			defer srv.Close()
+
+			resp, err := NewClient("k", WithBaseURL(srv.URL)).Send(context.Background(), Request{Model: "m"})
+			require.NoError(t, err)
+
+			if tt.want == "" {
+				assert.Nil(t, resp.ReasoningDetails)
+
+				return
+			}
+
+			assert.Equal(t, tt.want, string(resp.ReasoningDetails))
+		})
+	}
+}
