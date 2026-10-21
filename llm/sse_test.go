@@ -287,3 +287,116 @@ func TestParseStreamTextOnlyDeltas(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []Delta{{Reasoning: "Let me"}, {Reasoning: " see."}, {Content: "Hel"}, {Content: "lo"}}, got)
 }
+
+func sseFrames(frames ...string) string {
+	var b strings.Builder
+	for _, f := range frames {
+		b.WriteString("data: " + f + "\n")
+	}
+
+	b.WriteString("data: [DONE]\n")
+
+	return b.String()
+}
+
+func detailsFrame(entries string) string {
+	return `{"choices":[{"delta":{"reasoning_details":` + entries + `}}]}`
+}
+
+func TestParseStreamAssemblesReasoningDetails(t *testing.T) {
+	tests := []struct {
+		name   string
+		frames []string
+		want   string // "" = nil
+	}{
+		{
+			name: "fragments of one index concatenate and the late signature lands on the same entry",
+			frames: []string{
+				detailsFrame(`[{"type":"reasoning.text","text":"Let ","format":"anthropic-claude-v1","index":0}]`),
+				detailsFrame(`[{"type":"reasoning.text","text":"me think","format":"anthropic-claude-v1","index":0}]`),
+				detailsFrame(`[{"type":"reasoning.text","text":"","signature":"sig-A","format":"anthropic-claude-v1","index":0}]`),
+			},
+			want: `[{"type":"reasoning.text","text":"Let me think","signature":"sig-A","format":"anthropic-claude-v1","index":0}]`,
+		},
+		{
+			name: "indexes never merge and keep first-seen order",
+			frames: []string{
+				detailsFrame(`[{"type":"reasoning.summary","summary":"B1","index":1}]`),
+				detailsFrame(`[{"type":"reasoning.text","text":"A","index":0}]`),
+				detailsFrame(`[{"type":"reasoning.summary","summary":"B2","index":1}]`),
+			},
+			want: `[{"type":"reasoning.summary","summary":"B1B2","index":1},{"type":"reasoning.text","text":"A","index":0}]`,
+		},
+		{
+			name: "an entry without an index stays its own entry",
+			frames: []string{
+				`{"choices":[{"delta":{"reasoning":"thinking"}}]}`,
+				detailsFrame(`[{"type":"reasoning.text","format":"anthropic-claude-v1","signature":"sig-B"}]`),
+				detailsFrame(`[{"type":"reasoning.text","format":"anthropic-claude-v1","signature":"sig-C"}]`),
+			},
+			want: `[{"type":"reasoning.text","format":"anthropic-claude-v1","signature":"sig-B"},{"type":"reasoning.text","format":"anthropic-claude-v1","signature":"sig-C"}]`,
+		},
+		{
+			name:   "empty text with a signature survives",
+			frames: []string{detailsFrame(`[{"type":"reasoning.text","text":"","signature":"sig-A","index":0}]`)},
+			want:   `[{"type":"reasoning.text","text":"","signature":"sig-A","index":0}]`,
+		},
+		{
+			name: "encrypted data concatenates and unknown fields are kept",
+			frames: []string{
+				detailsFrame(`[{"type":"reasoning.encrypted","data":"QUJD","format":"google-gemini-v1","index":0,"x_extra":{"k":1}}]`),
+				detailsFrame(`[{"type":"reasoning.encrypted","data":"REVG","index":0}]`),
+			},
+			want: `[{"type":"reasoning.encrypted","data":"QUJDREVG","format":"google-gemini-v1","index":0,"x_extra":{"k":1}}]`,
+		},
+		{
+			name:   "a null fragment is skipped and a non-object one kept verbatim",
+			frames: []string{detailsFrame(`[null,"opaque",{"type":"reasoning.text","text":"A","index":0}]`)},
+			want:   `["opaque",{"type":"reasoning.text","text":"A","index":0}]`,
+		},
+		{
+			name:   "a non-array reasoning_details is ignored and the rest of the chunk survives",
+			frames: []string{`{"choices":[{"delta":{"content":"hi","reasoning_details":{"type":"reasoning.text","text":"x","index":0}}}]}`},
+			want:   "",
+		},
+		{
+			name:   "no reasoning_details leaves the response without them",
+			frames: []string{`{"choices":[{"delta":{"content":"hi","reasoning_details":null}}]}`},
+			want:   "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp, err := parseStream(strings.NewReader(sseFrames(tt.frames...)), nil)
+			require.NoError(t, err)
+
+			if tt.want == "" {
+				assert.Nil(t, resp.ReasoningDetails)
+
+				return
+			}
+
+			assert.JSONEq(t, tt.want, string(resp.ReasoningDetails))
+		})
+	}
+}
+
+func TestParseStreamReasoningDetailsBesideToolCallsSendNoDelta(t *testing.T) {
+	sse := sseFrames(
+		`{"choices":[{"delta":{"reasoning":"r","reasoning_details":[{"type":"reasoning.text","text":"r","index":0}]}}]}`,
+		`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"read","arguments":"{}"}}],"reasoning_details":[{"type":"reasoning.text","signature":"s","index":0}]}}]}`,
+		`{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`,
+	)
+
+	var deltas []Delta
+
+	resp, err := parseStream(strings.NewReader(sse), func(d Delta) { deltas = append(deltas, d) })
+	require.NoError(t, err)
+	assert.JSONEq(t, `[{"type":"reasoning.text","text":"r","signature":"s","index":0}]`, string(resp.ReasoningDetails))
+	require.Len(t, resp.ToolCalls, 1)
+	assert.Equal(t, []Delta{
+		{Reasoning: "r"},
+		{ToolCall: &ToolCallDelta{Index: 0, ID: "c1", Name: "read", ArgsFragment: "{}"}},
+	}, deltas)
+}

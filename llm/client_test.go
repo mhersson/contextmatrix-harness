@@ -379,3 +379,31 @@ func TestSendCapturesReasoningDetails(t *testing.T) {
 		})
 	}
 }
+
+func TestSendStreamReplayDoesNotDuplicateReasoningDetails(t *testing.T) {
+	partial := `data: {"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text","text":"A","index":0}]}}]}` + "\n"
+	fail := `data: {"error":{"message":"Upstream idle timeout exceeded"}}` + "\n"
+	full := partial + `data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}` + "\n" + "data: [DONE]\n"
+
+	var requests atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+
+		if requests.Add(1) == 1 {
+			io.WriteString(w, partial+fail) //nolint:errcheck
+
+			return
+		}
+
+		io.WriteString(w, full) //nolint:errcheck
+	}))
+	defer srv.Close()
+
+	c := NewClient("k", WithBaseURL(srv.URL), WithRetry(RetryPolicy{MaxRetries: 1, BaseDelay: time.Millisecond}))
+
+	resp, err := c.SendStream(context.Background(), Request{Model: "m"}, nil)
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, requests.Load())
+	assert.JSONEq(t, `[{"type":"reasoning.text","text":"A","index":0}]`, string(resp.ReasoningDetails))
+}

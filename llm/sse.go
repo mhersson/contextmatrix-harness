@@ -32,6 +32,8 @@ type streamDelta struct {
 	Reasoning        string           `json:"reasoning"`
 	ReasoningContent string           `json:"reasoning_content"`
 	ToolCalls        []streamToolCall `json:"tool_calls"`
+	// Raw so a non-array value never fails the chunk decode.
+	ReasoningDetails json.RawMessage `json:"reasoning_details"`
 }
 
 type streamToolCall struct {
@@ -56,7 +58,8 @@ type apiError struct {
 // (the name may arrive in a later frame than id/arguments), captures usage from
 // the final frame, surfaces mid-stream error frames as an error, and rejects a
 // stream that ends without [DONE] or a terminal finish_reason. onDelta
-// (nullable) receives incremental content, reasoning and tool-call fragments.
+// (nullable) receives incremental content, reasoning and tool-call fragments;
+// reasoning_details fragments are assembled per index and never reach onDelta.
 func parseStream(r io.Reader, onDelta func(Delta)) (Response, error) {
 	return parseStreamWithLimit(r, onDelta, maxSSELine)
 }
@@ -77,6 +80,8 @@ func parseStreamWithLimit(r io.Reader, onDelta func(Delta), maxLine int) (Respon
 	var order []int
 
 	var sawDone bool
+
+	var details detailsAccumulator
 
 	for sc.Scan() {
 		line := sc.Text()
@@ -144,6 +149,13 @@ func parseStreamWithLimit(r io.Reader, onDelta func(Delta), maxLine int) (Respon
 				}
 			}
 
+			var frags []json.RawMessage
+			if json.Unmarshal(d.ReasoningDetails, &frags) == nil {
+				for _, f := range frags {
+					details.add(f)
+				}
+			}
+
 			for _, tc := range d.ToolCalls {
 				cur, ok := acc[tc.Index]
 				if !ok {
@@ -206,6 +218,13 @@ func parseStreamWithLimit(r io.Reader, onDelta func(Delta), maxLine int) (Respon
 	if !sawDone && resp.FinishReason == "" {
 		return resp, fmt.Errorf("truncated stream: ended without [DONE] or a terminal finish_reason")
 	}
+
+	rd, err := details.result()
+	if err != nil {
+		return resp, fmt.Errorf("assemble reasoning_details: %w", err)
+	}
+
+	resp.ReasoningDetails = rd
 
 	for _, idx := range order {
 		tc := acc[idx]
