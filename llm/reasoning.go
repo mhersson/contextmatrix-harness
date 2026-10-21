@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"strings"
 )
 
 // replayableDetails returns raw (trimmed) when it is a JSON array with at
@@ -22,16 +24,62 @@ func replayableDetails(raw json.RawMessage) json.RawMessage {
 	return raw
 }
 
+// detailEntry keeps concat-key strings in builders so a long stream is linear;
+// fields and cat never hold the same key.
 type detailEntry struct {
 	fields   map[string]json.RawMessage
+	cat      map[string]*strings.Builder
 	verbatim json.RawMessage // a non-object fragment, kept as sent
+}
+
+func newDetailEntry(fields map[string]json.RawMessage) *detailEntry {
+	e := &detailEntry{fields: map[string]json.RawMessage{}, cat: map[string]*strings.Builder{}}
+
+	for k, v := range fields {
+		if s, ok := jsonString(v); ok && concatKey(k) {
+			e.cat[k] = &strings.Builder{}
+			e.cat[k].WriteString(s)
+
+			continue
+		}
+
+		e.fields[k] = v
+	}
+
+	return e
+}
+
+func (e *detailEntry) merge(fields map[string]json.RawMessage) {
+	for k, v := range fields {
+		if concatKey(k) {
+			if s, ok := jsonString(v); ok {
+				b := e.cat[k]
+				if b == nil {
+					b = &strings.Builder{}
+					e.cat[k] = b
+
+					delete(e.fields, k)
+				}
+
+				b.WriteString(s)
+
+				continue
+			}
+		}
+
+		if !emptyJSON(v) {
+			e.fields[k] = v
+
+			delete(e.cat, k)
+		}
+	}
 }
 
 // detailsAccumulator merges streamed reasoning_details fragments per index.
 // The provider-side signature check covers the assembled entries, so unknown
 // keys are carried through untouched.
 type detailsAccumulator struct {
-	entries []detailEntry
+	entries []*detailEntry
 	byIndex map[int]int
 }
 
@@ -41,17 +89,15 @@ func (a *detailsAccumulator) add(frag json.RawMessage) {
 	}
 
 	var fields map[string]json.RawMessage
-	if json.Unmarshal(frag, &fields) != nil || fields == nil {
-		a.entries = append(a.entries, detailEntry{verbatim: frag})
+	if json.Unmarshal(frag, &fields) != nil {
+		a.entries = append(a.entries, &detailEntry{verbatim: frag})
 
 		return
 	}
 
-	var idx int
-
-	raw, ok := fields["index"]
-	if !ok || json.Unmarshal(raw, &idx) != nil {
-		a.entries = append(a.entries, detailEntry{fields: fields})
+	idx, ok := integerIndex(fields["index"])
+	if !ok {
+		a.entries = append(a.entries, newDetailEntry(fields))
 
 		return
 	}
@@ -63,24 +109,26 @@ func (a *detailsAccumulator) add(frag json.RawMessage) {
 		}
 
 		a.byIndex[idx] = len(a.entries)
-		a.entries = append(a.entries, detailEntry{fields: fields})
+		a.entries = append(a.entries, newDetailEntry(fields))
 
 		return
 	}
 
-	cur := a.entries[pos].fields
-	for k, v := range fields {
-		if s, isStr := jsonString(v); isStr && concatKey(k) {
-			prev, _ := jsonString(cur[k])
-			cur[k] = encodeString(prev + s)
+	a.entries[pos].merge(fields)
+}
 
-			continue
-		}
-
-		if !emptyJSON(v) {
-			cur[k] = v
-		}
+// integerIndex reports a JSON integer; null, strings and floats are not indexes.
+func integerIndex(raw json.RawMessage) (int, bool) {
+	if emptyJSON(raw) {
+		return 0, false
 	}
+
+	var idx int
+	if json.Unmarshal(raw, &idx) != nil {
+		return 0, false
+	}
+
+	return idx, true
 }
 
 // result returns the assembled JSON array, or nil when no entries arrived.
@@ -98,7 +146,14 @@ func (a *detailsAccumulator) result() (json.RawMessage, error) {
 			continue
 		}
 
-		b, err := marshalNoEscape(e.fields)
+		out := make(map[string]json.RawMessage, len(e.fields)+len(e.cat))
+		maps.Copy(out, e.fields)
+
+		for k, b := range e.cat {
+			out[k] = encodeString(b.String())
+		}
+
+		b, err := marshalNoEscape(out)
 		if err != nil {
 			return nil, fmt.Errorf("encode reasoning detail: %w", err)
 		}
@@ -123,7 +178,12 @@ func concatKey(k string) bool {
 	}
 }
 
+// jsonString decodes only a JSON string token; null is not a string.
 func jsonString(raw json.RawMessage) (string, bool) {
+	if t := bytes.TrimSpace(raw); len(t) == 0 || t[0] != '"' {
+		return "", false
+	}
+
 	var s string
 	if json.Unmarshal(raw, &s) != nil {
 		return "", false

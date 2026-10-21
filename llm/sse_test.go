@@ -1,8 +1,10 @@
 package llm
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -360,6 +362,47 @@ func TestParseStreamAssemblesReasoningDetails(t *testing.T) {
 			want:   "",
 		},
 		{
+			name: "null and non-integer indexes make their own entries",
+			frames: []string{
+				detailsFrame(`[{"signature":"sig-B","index":null},{"signature":"sig-C","index":null},{"signature":"sig-D","index":"1"},{"signature":"sig-E","index":1.5}]`),
+			},
+			want: `[{"signature":"sig-B","index":null},{"signature":"sig-C","index":null},{"signature":"sig-D","index":"1"},{"signature":"sig-E","index":1.5}]`,
+		},
+		{
+			name: "an integer fragment and a null-index fragment do not merge",
+			frames: []string{
+				detailsFrame(`[{"text":"A","index":0}]`),
+				detailsFrame(`[{"text":"B","index":null}]`),
+			},
+			want: `[{"text":"A","index":0},{"text":"B","index":null}]`,
+		},
+		{
+			name: "null on a concat key is skipped, not written as an empty string",
+			frames: []string{
+				detailsFrame(`[{"data":"X","index":0}]`),
+				detailsFrame(`[{"data":"Y","text":null,"summary":null,"index":0}]`),
+			},
+			want: `[{"data":"XY","index":0}]`,
+		},
+		{
+			name: "a non-string value on a concat key overwrites and a later string restarts from it",
+			frames: []string{
+				detailsFrame(`[{"data":"X","index":0}]`),
+				detailsFrame(`[{"data":{"k":1},"index":0}]`),
+			},
+			want: `[{"data":{"k":1},"index":0}]`,
+		},
+		{
+			name: "a string after a non-string concat value replaces it",
+			frames: []string{
+				detailsFrame(`[{"data":"X","index":0}]`),
+				detailsFrame(`[{"data":{"k":1},"index":0}]`),
+				detailsFrame(`[{"data":"Z","index":0}]`),
+				detailsFrame(`[{"data":"W","index":0}]`),
+			},
+			want: `[{"data":"ZW","index":0}]`,
+		},
+		{
 			name:   "no reasoning_details leaves the response without them",
 			frames: []string{`{"choices":[{"delta":{"content":"hi","reasoning_details":null}}]}`},
 			want:   "",
@@ -373,6 +416,10 @@ func TestParseStreamAssemblesReasoningDetails(t *testing.T) {
 
 			if tt.want == "" {
 				assert.Nil(t, resp.ReasoningDetails)
+
+				if strings.Contains(tt.name, "non-array") {
+					assert.Equal(t, "hi", resp.Content)
+				}
 
 				return
 			}
@@ -399,4 +446,19 @@ func TestParseStreamReasoningDetailsBesideToolCallsSendNoDelta(t *testing.T) {
 		{Reasoning: "r"},
 		{ToolCall: &ToolCallDelta{Index: 0, ID: "c1", Name: "read", ArgsFragment: "{}"}},
 	}, deltas)
+}
+
+func TestDetailsAccumulatorLinearInFragments(t *testing.T) {
+	var a detailsAccumulator
+
+	start := time.Now()
+
+	for range 20000 {
+		a.add(json.RawMessage(`{"type":"reasoning.text","text":"0123456789","index":0}`))
+	}
+
+	out, err := a.result()
+	require.NoError(t, err)
+	assert.Less(t, time.Since(start), 2*time.Second)
+	assert.Contains(t, string(out), strings.Repeat("0123456789", 20000))
 }
