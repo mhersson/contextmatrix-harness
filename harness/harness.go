@@ -417,6 +417,8 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 			// mixed-version fleet without changing the meaning of the
 			// existing prompt_tokens field.
 			"wire_prompt_tokens": resp.Usage.PromptTokens,
+			// A subset of completion_tokens, not a separate bucket.
+			"reasoning_tokens": resp.Usage.ReasoningTokens(),
 		}, resp.Provider))
 
 		if cfg.ContextWindow > 0 {
@@ -441,6 +443,7 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 							"cost_usd": cUsage.Cost, "model": cfg.Model, "phase": "compaction",
 							"cache_read_tokens": cCacheRead, "cache_creation_tokens": cCacheCreation,
 							"wire_prompt_tokens": cUsage.PromptTokens,
+							"reasoning_tokens":   cUsage.ReasoningTokens(),
 						}, cResp.Provider))
 					}
 

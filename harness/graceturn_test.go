@@ -461,6 +461,7 @@ func TestGraceTurnUsageEventCarriesCacheBuckets(t *testing.T) {
 				PromptTokens: 100, CompletionTokens: 20, Cost: 0.5,
 				PromptTokensDetails:      &llm.PromptTokensDetails{CachedTokens: 60},
 				CacheCreationInputTokens: 8,
+				CompletionTokensDetails:  &llm.CompletionTokensDetails{ReasoningTokens: 9},
 			},
 		},
 	}}
@@ -491,6 +492,7 @@ func TestGraceTurnUsageEventCarriesCacheBuckets(t *testing.T) {
 	// The grace-call usage event must carry both cache fields.
 	assert.InDelta(t, 60.0, graceUsageEv.Data["cache_read_tokens"], 0, "cache_read_tokens must match")
 	assert.InDelta(t, 8.0, graceUsageEv.Data["cache_creation_tokens"], 0, "cache_creation_tokens must match")
+	assert.InDelta(t, 9.0, graceUsageEv.Data["reasoning_tokens"], 0, "reasoning_tokens must match")
 
 	// Disjoint buckets: 60 of the 100 prompt tokens were a cache read.
 	assert.InDelta(t, 40.0, graceUsageEv.Data["prompt_tokens"], 0, "prompt_tokens must exclude the cached portion")

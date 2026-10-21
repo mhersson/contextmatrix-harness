@@ -2109,6 +2109,7 @@ func TestRunUsageEventCarriesCacheBuckets_CachedTokens(t *testing.T) {
 				PromptTokens: 100, CompletionTokens: 10, Cost: 0.5,
 				PromptTokensDetails:      &llm.PromptTokensDetails{CachedTokens: 80},
 				CacheCreationInputTokens: 7,
+				CompletionTokensDetails:  &llm.CompletionTokensDetails{ReasoningTokens: 7},
 			},
 		},
 	}}
@@ -2127,6 +2128,7 @@ func TestRunUsageEventCarriesCacheBuckets_CachedTokens(t *testing.T) {
 	// Cache fields must be present.
 	assert.InDelta(t, 80.0, usageEv.Data["cache_read_tokens"], 0, "cache_read_tokens must match")
 	assert.InDelta(t, 7.0, usageEv.Data["cache_creation_tokens"], 0, "cache_creation_tokens must match")
+	assert.InDelta(t, 7.0, usageEv.Data["reasoning_tokens"], 0, "reasoning_tokens must match")
 
 	// The three token fields are disjoint, matching Result and what the agent
 	// reports to the board: 80 of the 100 prompt tokens were a cache read.
@@ -2236,6 +2238,7 @@ func TestRunCompactionUsageEventCarriesCacheBuckets(t *testing.T) {
 				PromptTokens: 500, CompletionTokens: 20, Cost: 0.10,
 				PromptTokensDetails:      &llm.PromptTokensDetails{CachedTokens: 300},
 				CacheCreationInputTokens: 12,
+				CompletionTokensDetails:  &llm.CompletionTokensDetails{ReasoningTokens: 5},
 			},
 		},
 		{Content: "done", FinishReason: "stop"},
@@ -2270,6 +2273,7 @@ func TestRunCompactionUsageEventCarriesCacheBuckets(t *testing.T) {
 
 	assert.InDelta(t, 300.0, compactionEv.Data["cache_read_tokens"], 0, "cache_read_tokens must match")
 	assert.InDelta(t, 12.0, compactionEv.Data["cache_creation_tokens"], 0, "cache_creation_tokens must match")
+	assert.InDelta(t, 5.0, compactionEv.Data["reasoning_tokens"], 0, "reasoning_tokens must match")
 	assert.InDelta(t, 200.0, compactionEv.Data["prompt_tokens"], 0, "prompt_tokens must exclude the cached portion")
 	assert.InDelta(t, 20.0, compactionEv.Data["completion_tokens"], 0, "completion_tokens must be preserved")
 	assert.InDelta(t, 0.10, compactionEv.Data["cost_usd"], 0, "cost_usd must be preserved")
@@ -2278,6 +2282,18 @@ func TestRunCompactionUsageEventCarriesCacheBuckets(t *testing.T) {
 	// is larger than the disjoint bucket - the compaction event must be
 	// self-describing too, since it is its own billable call.
 	assert.InDelta(t, 500.0, compactionEv.Data["wire_prompt_tokens"], 0, "wire_prompt_tokens must carry the pre-normalization value")
+}
+
+func TestRunUsageEventReasoningTokensZeroWhenUnreported(t *testing.T) {
+	var transcript bytes.Buffer
+
+	_, err := Run(context.Background(), &fakeLLM{}, tools.NewRegistry(), events.NewEmitter(nil, &transcript), "task", Config{MaxTurns: 1})
+	require.NoError(t, err)
+
+	usageEv := findUsageEvent(parseEvents(t, transcript.String()))
+	require.NotNil(t, usageEv)
+	require.Contains(t, usageEv.Data, "reasoning_tokens")
+	assert.InDelta(t, 0.0, usageEv.Data["reasoning_tokens"], 0)
 }
 
 // TestRunDuplicateTerminalCallExecutesOnce pins that a second terminal call in
