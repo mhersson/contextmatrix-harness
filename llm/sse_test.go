@@ -2,9 +2,9 @@ package llm
 
 import (
 	"encoding/json"
+	"runtime"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -310,6 +310,8 @@ func TestParseStreamAssemblesReasoningDetails(t *testing.T) {
 		name   string
 		frames []string
 		want   string // "" = nil
+		// wantContent, when set, is the expected Response.Content.
+		wantContent string
 	}{
 		{
 			name: "fragments of one index concatenate and the late signature lands on the same entry",
@@ -360,6 +362,8 @@ func TestParseStreamAssemblesReasoningDetails(t *testing.T) {
 			name:   "a non-array reasoning_details is ignored and the rest of the chunk survives",
 			frames: []string{`{"choices":[{"delta":{"content":"hi","reasoning_details":{"type":"reasoning.text","text":"x","index":0}}}]}`},
 			want:   "",
+
+			wantContent: "hi",
 		},
 		{
 			name: "null and non-integer indexes make their own entries",
@@ -385,7 +389,7 @@ func TestParseStreamAssemblesReasoningDetails(t *testing.T) {
 			want: `[{"data":"XY","index":0}]`,
 		},
 		{
-			name: "a non-string value on a concat key overwrites and a later string restarts from it",
+			name: "a non-string value on a concat key overwrites",
 			frames: []string{
 				detailsFrame(`[{"data":"X","index":0}]`),
 				detailsFrame(`[{"data":{"k":1},"index":0}]`),
@@ -414,12 +418,12 @@ func TestParseStreamAssemblesReasoningDetails(t *testing.T) {
 			resp, err := parseStream(strings.NewReader(sseFrames(tt.frames...)), nil)
 			require.NoError(t, err)
 
+			if tt.wantContent != "" {
+				assert.Equal(t, tt.wantContent, resp.Content)
+			}
+
 			if tt.want == "" {
 				assert.Nil(t, resp.ReasoningDetails)
-
-				if strings.Contains(tt.name, "non-array") {
-					assert.Equal(t, "hi", resp.Content)
-				}
 
 				return
 			}
@@ -448,17 +452,34 @@ func TestParseStreamReasoningDetailsBesideToolCallsSendNoDelta(t *testing.T) {
 	}, deltas)
 }
 
-func TestDetailsAccumulatorLinearInFragments(t *testing.T) {
+// allocatedBy returns the bytes allocated while n fragments are added and assembled.
+func allocatedBy(t *testing.T, n int) uint64 {
+	t.Helper()
+
+	var before, after runtime.MemStats
+
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+
 	var a detailsAccumulator
 
-	start := time.Now()
-
-	for range 20000 {
+	for range n {
 		a.add(json.RawMessage(`{"type":"reasoning.text","text":"0123456789","index":0}`))
 	}
 
 	out, err := a.result()
 	require.NoError(t, err)
-	assert.Less(t, time.Since(start), 2*time.Second)
-	assert.Contains(t, string(out), strings.Repeat("0123456789", 20000))
+	require.Contains(t, string(out), strings.Repeat("0123456789", n))
+
+	runtime.ReadMemStats(&after)
+
+	return after.TotalAlloc - before.TotalAlloc
+}
+
+// Quadruple the fragments: linear allocation grows about 4x, quadratic about 16x.
+func TestDetailsAccumulatorLinearInFragments(t *testing.T) {
+	small := allocatedBy(t, 5000)
+	large := allocatedBy(t, 20000)
+
+	assert.Less(t, large, small*8, "allocation grew faster than linearly: %d -> %d bytes", small, large)
 }
