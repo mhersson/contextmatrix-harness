@@ -141,8 +141,8 @@ type CompletionTokensDetails struct {
 	ReasoningTokens int `json:"reasoning_tokens"`
 }
 
-// UnmarshalJSON never fails: this field is unused best-effort telemetry, so a
-// malformed value must not fail the call. Anything but an integral number yields 0.
+// UnmarshalJSON never fails: reasoning_tokens is best-effort telemetry, so a
+// malformed value must not fail the call. Only integral values in [0, 2^31) are kept.
 func (c *CompletionTokensDetails) UnmarshalJSON(data []byte) error {
 	*c = CompletionTokensDetails{}
 
