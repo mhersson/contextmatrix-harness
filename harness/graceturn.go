@@ -143,9 +143,8 @@ func sendTurn(ctx context.Context, client llm.LLM, emit *events.Emitter, cfg Con
 		Tools:      toolSchemas,
 		ToolChoice: choice,
 	}
-	emit.Emit(events.ModelRequest, map[string]any{"turn": res.Turns, "model": cfg.Model, "messages": len(msgs)})
 
-	resp, err := client.SendStream(ctx, req, cfg.OnDelta)
+	resp, err := sendModel(ctx, client, emit, cfg, req, res.Turns)
 	if err != nil {
 		return resp, err
 	}

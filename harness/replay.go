@@ -2,9 +2,11 @@ package harness
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"slices"
 
+	"github.com/mhersson/contextmatrix-harness/events"
 	"github.com/mhersson/contextmatrix-harness/llm"
 )
 
@@ -129,4 +131,19 @@ func replayRequest(req llm.Request) (llm.Request, string) {
 	req.Messages = withoutForeignReasoning(req.Messages, pin)
 
 	return req, pin
+}
+
+// sendModel sends a turn or grace request pinned by replayRequest and emits
+// its model_request event, adding pinned_provider when a pin applies.
+func sendModel(ctx context.Context, client llm.LLM, emit *events.Emitter, cfg Config, req llm.Request, turn int) (llm.Response, error) {
+	sent, pin := replayRequest(req)
+
+	data := map[string]any{"turn": turn, "model": cfg.Model, "messages": len(req.Messages)}
+	if pin != "" {
+		data["pinned_provider"] = pin
+	}
+
+	emit.Emit(events.ModelRequest, data)
+
+	return client.SendStream(ctx, sent, cfg.OnDelta)
 }

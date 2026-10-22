@@ -138,6 +138,12 @@ type Config struct {
 	// and fills the window sooner; the context stop reads the provider's
 	// prompt_tokens, which include it. An upstream that rejects the field
 	// fails the call with a 400: leave this false for that model.
+	//
+	// With replay on, each reply's details record the provider that served
+	// them (llm.Message.ReasoningProvider), and every turn request puts the
+	// provider of the newest details first in Provider's order and drops
+	// details from any other provider: signed reasoning validates only where
+	// it was produced. Provider's own only and ignore win over the pin.
 	ReplayReasoning bool
 }
 
@@ -369,9 +375,8 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 			Messages:  msgs,
 			Tools:     reg.Schemas(),
 		}
-		emit.Emit(events.ModelRequest, map[string]any{"turn": res.Turns, "model": cfg.Model, "messages": len(msgs)})
 
-		resp, err := client.SendStream(ctx, req, cfg.OnDelta)
+		resp, err := sendModel(ctx, client, emit, cfg, req, res.Turns)
 		if err != nil {
 			if stop, ferr := failTurn(err); stop {
 				return res, ferr
@@ -518,6 +523,9 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 		asst := llm.Message{Role: "assistant", Content: resp.Content, ToolCalls: resp.ToolCalls}
 		if cfg.ReplayReasoning {
 			asst.ReasoningDetails = resp.ReasoningDetails
+			if resp.ReasoningDetails != nil {
+				asst.ReasoningProvider = resp.Provider
+			}
 		}
 
 		msgs = append(msgs, asst)

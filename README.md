@@ -80,6 +80,15 @@ signed: consumers never modify or redact them, drop them from `History` when
 the model changes, and leave replay off for a model whose upstream rejects the
 field.
 
+Signed reasoning validates only on the provider that produced it, so with
+replay on each reply records that provider on its message
+(`Message.ReasoningProvider`: kept by `json.Marshal`, never sent). Every turn
+request then puts the newest details' provider first in `Provider`'s `order`,
+keeps the consumer's other routing keys, and drops details from any other
+provider; the consumer's `only` and `ignore` win over the pin, and a fallback
+reply moves the pin. The compaction summarizer is never pinned, and the
+endpoint dialect sends no routing object.
+
 ## Developing
 
 Contributor conventions, verification commands (`make test`, `make test-race`,

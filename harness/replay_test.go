@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -222,4 +223,166 @@ func TestReplayRequest(t *testing.T) {
 	out, pin = replayRequest(excluded)
 	assert.Empty(t, pin)
 	assert.Equal(t, excluded, out, "a declined pin leaves the request exactly as built")
+}
+
+func servedBy(resp llm.Response, provider string) llm.Response {
+	resp.Provider = provider
+
+	return resp
+}
+
+func modelRequests(t *testing.T, transcript string) []events.Event {
+	t.Helper()
+
+	var out []events.Event
+
+	for _, ev := range parseEvents(t, transcript) {
+		if ev.Kind == events.ModelRequest {
+			out = append(out, ev)
+		}
+	}
+
+	return out
+}
+
+func TestRunPinsReplayProvider(t *testing.T) {
+	for _, replay := range []bool{false, true} {
+		t.Run(fmt.Sprintf("replay=%v", replay), func(t *testing.T) {
+			var transcript bytes.Buffer
+
+			fake := &burnLLM{responses: []llm.Response{
+				servedBy(readTurn(sigDetails), "Claude Platform on AWS"),
+				servedBy(llm.Response{Content: "done", FinishReason: "stop"}, "Claude Platform on AWS"),
+			}}
+
+			res, err := Run(context.Background(), fake, readReg(t), events.NewEmitter(nil, &transcript), "task", Config{
+				Model: "m", MaxTurns: 5, ReplayReasoning: replay, Provider: json.RawMessage(`{"sort":"price"}`),
+			})
+			require.NoError(t, err)
+			require.Len(t, fake.requests, 2)
+			assert.JSONEq(t, `{"sort":"price"}`, string(fake.requests[0].Provider), "the first request has nothing to pin")
+
+			reqs := modelRequests(t, transcript.String())
+			require.Len(t, reqs, 2)
+			assert.NotContains(t, reqs[0].Data, "pinned_provider")
+
+			if !replay {
+				assert.JSONEq(t, `{"sort":"price"}`, string(fake.requests[1].Provider), "off never pins")
+				assert.Empty(t, res.Messages[1].ReasoningProvider, "off records no provider")
+				assert.NotContains(t, reqs[1].Data, "pinned_provider")
+
+				return
+			}
+
+			assert.JSONEq(t, `{"order":["Claude Platform on AWS"],"sort":"price"}`, string(fake.requests[1].Provider))
+			assert.Equal(t, "Claude Platform on AWS", res.Messages[1].ReasoningProvider)
+			assert.Equal(t, "Claude Platform on AWS", reqs[1].Data["pinned_provider"])
+		})
+	}
+}
+
+func TestRunFallbackReplyMovesPinAndStripsForeignBlocks(t *testing.T) {
+	fake := &burnLLM{responses: []llm.Response{
+		servedBy(readTurn(detailsA), "Anthropic"),
+		servedBy(readTurn(detailsB), "Azure"), // the gateway fell back
+		{Content: "done", FinishReason: "stop"},
+	}}
+
+	res, err := Run(context.Background(), fake, readReg(t), newEmitter(), "task", Config{MaxTurns: 5, ReplayReasoning: true})
+	require.NoError(t, err)
+	require.Len(t, fake.requests, 3)
+
+	// [0] task, [1] assistant A, [2] tool, [3] assistant B, [4] tool
+	third := fake.requests[2]
+	assert.JSONEq(t, `{"order":["Azure"]}`, string(third.Provider))
+	assert.Nil(t, third.Messages[1].ReasoningDetails, "the earlier provider's block is dropped from the request")
+	assert.JSONEq(t, detailsB, string(third.Messages[3].ReasoningDetails))
+	assert.JSONEq(t, detailsA, string(res.Messages[1].ReasoningDetails), "the history keeps every block")
+}
+
+func TestRunResumedHistoryPinsFromStoredProvider(t *testing.T) {
+	tests := []struct {
+		name       string
+		newest     llm.Message
+		wantPin    string // "" = request Provider stays nil
+		wantSentA  bool   // the Wafer block at index 1 reaches the wire
+		wantSentV0 bool   // the provenance-less block at index 3 reaches the wire
+	}{
+		{"newest block names its provider", llm.Message{
+			Role: "assistant", Content: "a3",
+			ReasoningDetails: json.RawMessage(detailsB), ReasoningProvider: "Anthropic",
+		}, "Anthropic", false, false},
+		{"newest block predates provenance", llm.Message{
+			Role: "assistant", Content: "a3",
+			ReasoningDetails: json.RawMessage(detailsB),
+		}, "", true, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stored, err := json.Marshal([]llm.Message{
+				{Role: "user", Content: "q1"},
+				{Role: "assistant", Content: "a1", ReasoningDetails: json.RawMessage(detailsA), ReasoningProvider: "Wafer"},
+				{Role: "user", Content: "q2"},
+				{Role: "assistant", Content: "a2", ReasoningDetails: json.RawMessage(sigDetails)},
+				{Role: "user", Content: "q3"},
+				tt.newest,
+			})
+			require.NoError(t, err)
+
+			var history []llm.Message
+			require.NoError(t, json.Unmarshal(stored, &history))
+
+			fake := &burnLLM{responses: []llm.Response{{Content: "done", FinishReason: "stop"}}}
+
+			_, err = Run(context.Background(), fake, tools.NewRegistry(), newEmitter(), "task",
+				Config{MaxTurns: 1, History: history, ReplayReasoning: true})
+			require.NoError(t, err)
+
+			req := fake.requests[0]
+			if tt.wantPin == "" {
+				assert.Nil(t, req.Provider)
+			} else {
+				assert.JSONEq(t, `{"order":["`+tt.wantPin+`"]}`, string(req.Provider))
+			}
+
+			assert.Equal(t, tt.wantSentA, req.Messages[1].ReasoningDetails != nil)
+			assert.Equal(t, tt.wantSentV0, req.Messages[3].ReasoningDetails != nil)
+			assert.JSONEq(t, detailsB, string(req.Messages[5].ReasoningDetails))
+			assert.JSONEq(t, detailsA, string(history[1].ReasoningDetails), "the caller's History is never modified")
+		})
+	}
+}
+
+func TestRunUnreportedProviderReplaysUnpinned(t *testing.T) {
+	fake := &burnLLM{responses: []llm.Response{readTurn(sigDetails), {Content: "done", FinishReason: "stop"}}}
+
+	res, err := Run(context.Background(), fake, readReg(t), newEmitter(), "task", Config{MaxTurns: 5, ReplayReasoning: true})
+	require.NoError(t, err)
+	require.Len(t, fake.requests, 2)
+	assert.Nil(t, fake.requests[1].Provider)
+	assert.JSONEq(t, sigDetails, string(fake.requests[1].Messages[1].ReasoningDetails))
+	assert.Empty(t, res.Messages[1].ReasoningProvider)
+}
+
+func TestGraceTurnPinsReplayProvider(t *testing.T) {
+	reg := tools.NewRegistry(tools.NewReadTool(t.TempDir()), &graceFinishTool{})
+	fake := &burnLLM{responses: []llm.Response{
+		servedBy(llm.Response{ToolCalls: []llm.ToolCall{toolCall("1", "read", `{"path":"m1"}`)}, ReasoningDetails: json.RawMessage(detailsA)}, "Anthropic"),
+		servedBy(llm.Response{ToolCalls: []llm.ToolCall{toolCall("2", "read", `{"path":"m2"}`)}, ReasoningDetails: json.RawMessage(detailsA)}, "Anthropic"),
+		servedBy(llm.Response{ToolCalls: []llm.ToolCall{toolCall("3", "read", `{"path":"m3"}`)}, ReasoningDetails: json.RawMessage(detailsB)}, "Wafer"),
+		{ToolCalls: []llm.ToolCall{toolCall("4", "finish", `{}`)}},
+	}}
+
+	res, err := Run(context.Background(), fake, reg, newEmitter(), "task",
+		Config{MaxTurns: 3, GraceTurn: true, ReplayReasoning: true})
+	require.NoError(t, err)
+	assert.True(t, res.Completed)
+	require.Len(t, fake.requests, 4)
+
+	grace := fake.requests[3]
+	assert.JSONEq(t, `{"order":["Wafer"]}`, string(grace.Provider))
+	assert.NotNil(t, grace.ToolChoice)
+	assert.Nil(t, grace.Messages[1].ReasoningDetails)
+	assert.JSONEq(t, detailsB, string(grace.Messages[5].ReasoningDetails))
 }
