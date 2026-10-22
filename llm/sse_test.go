@@ -369,6 +369,35 @@ func TestParseStreamAssemblesReasoningDetails(t *testing.T) {
 			want: `[{"type":"reasoning.encrypted","data":"QUJDREVG","format":"google-gemini-v1","index":0,"x_extra":{"k":1}}]`,
 		},
 		{
+			name: "a differently typed fragment on one index is its own entry",
+			frames: []string{
+				detailsFrame(`[{"type":"reasoning.text","text":"summary","format":"google-gemini-v1","index":0}]`),
+				detailsFrame(`[{"type":"reasoning.encrypted","data":"QUJD","id":"tc-1","format":"google-gemini-v1","index":0}]`),
+			},
+			want: `[{"type":"reasoning.text","text":"summary","format":"google-gemini-v1","index":0},{"type":"reasoning.encrypted","data":"QUJD","id":"tc-1","format":"google-gemini-v1","index":0}]`,
+		},
+		{
+			name: "a type-less continuation merges into the latest entry for its index",
+			frames: []string{
+				detailsFrame(`[{"type":"reasoning.text","text":"A","index":0}]`),
+				detailsFrame(`[{"type":"reasoning.encrypted","data":"QUJD","index":0}]`),
+				detailsFrame(`[{"data":"REVG","index":0}]`),
+				detailsFrame(`[{"type":"","data":"R0hJ","index":0}]`),
+				detailsFrame(`[{"type":null,"data":"SktM","index":0}]`),
+			},
+			want: `[{"type":"reasoning.text","text":"A","index":0},{"type":"reasoning.encrypted","data":"QUJDREVGR0hJSktM","index":0}]`,
+		},
+		{
+			name: "text then encrypted then text on one index gives three entries",
+			frames: []string{
+				detailsFrame(`[{"type":"reasoning.text","text":"A","index":0}]`),
+				detailsFrame(`[{"type":"reasoning.encrypted","data":"QUJD","index":0}]`),
+				detailsFrame(`[{"type":"reasoning.text","text":"B","index":0}]`),
+				detailsFrame(`[{"type":"reasoning.text","text":"C","index":0}]`),
+			},
+			want: `[{"type":"reasoning.text","text":"A","index":0},{"type":"reasoning.encrypted","data":"QUJD","index":0},{"type":"reasoning.text","text":"BC","index":0}]`,
+		},
+		{
 			name:   "a null fragment is skipped and a non-object one kept verbatim",
 			frames: []string{detailsFrame(`[null,"opaque",{"type":"reasoning.text","text":"A","index":0}]`)},
 			want:   `["opaque",{"type":"reasoning.text","text":"A","index":0}]`,

@@ -30,10 +30,12 @@ type detailEntry struct {
 	fields   map[string]json.RawMessage
 	cat      map[string]*strings.Builder
 	verbatim json.RawMessage // a non-object fragment, kept as sent
+	typ      string          // the type the entry was created with; never overwritten
 }
 
 func newDetailEntry(fields map[string]json.RawMessage) *detailEntry {
 	e := &detailEntry{fields: map[string]json.RawMessage{}, cat: map[string]*strings.Builder{}}
+	e.typ, _ = fragmentType(fields)
 
 	for k, v := range fields {
 		if s, ok := jsonString(v); ok && concatKey(k) {
@@ -77,10 +79,9 @@ func (e *detailEntry) merge(fields map[string]json.RawMessage) {
 
 // detailsAccumulator merges streamed reasoning_details fragments per index.
 // The provider-side signature check covers the assembled entries, so unknown
-// keys are carried through untouched. Fragments sharing an index merge
-// regardless of type, and type takes the latest value: live Gemini streams
-// send a reasoning.text and a reasoning.encrypted fragment on one index, and
-// the provider accepted the folded entry on replay.
+// keys are carried through untouched. A fragment of a different non-empty type
+// is a separate signed block and starts a new entry, as the gateway's
+// non-streamed reply lists them.
 type detailsAccumulator struct {
 	entries []*detailEntry
 	byIndex map[int]int
@@ -117,7 +118,23 @@ func (a *detailsAccumulator) add(frag json.RawMessage) {
 		return
 	}
 
-	a.entries[pos].merge(fields)
+	e := a.entries[pos]
+	if t, ok := fragmentType(fields); ok && t != e.typ {
+		a.byIndex[idx] = len(a.entries)
+		a.entries = append(a.entries, newDetailEntry(fields))
+
+		return
+	}
+
+	e.merge(fields)
+}
+
+// fragmentType returns a fragment's non-empty string type; absent, null and
+// empty types report false and continue the latest entry.
+func fragmentType(fields map[string]json.RawMessage) (string, bool) {
+	s, ok := jsonString(fields["type"])
+
+	return s, ok && s != ""
 }
 
 // integerIndex reports a JSON integer; null, strings and floats are not indexes.
