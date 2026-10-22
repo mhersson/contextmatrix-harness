@@ -504,3 +504,35 @@ func TestGraceTurnUsageEventCarriesCacheBuckets(t *testing.T) {
 	// loop's usage accounting, so it must carry the same self-describing field.
 	assert.InDelta(t, 100.0, graceUsageEv.Data["wire_prompt_tokens"], 0, "wire_prompt_tokens must carry the pre-normalization value")
 }
+
+func TestGraceTurnBadRequestDropsReplayBeforeToolChoice(t *testing.T) {
+	fin := &graceFinishTool{}
+	reg := tools.NewRegistry(tools.NewReadTool(t.TempDir()), fin)
+
+	turn := func(id string) llm.Response {
+		return llm.Response{
+			ToolCalls:        []llm.ToolCall{toolCall(id, "read", `{"path":"missing`+id+`"}`)},
+			ReasoningDetails: json.RawMessage(`[{"type":"reasoning.text","text":"t","index":0}]`),
+			Provider:         "Anthropic",
+		}
+	}
+	w := &burnLLM{
+		errs: []error{nil, nil, nil, errors.New("llm endpoint status 400: rejected")},
+		responses: []llm.Response{
+			turn("1"), turn("2"), turn("3"),
+			{ToolCalls: []llm.ToolCall{toolCall("4", "finish", `{}`)}},
+		},
+	}
+
+	res, err := Run(context.Background(), w, reg, newEmitter(), "task", Config{MaxTurns: 3, GraceTurn: true, ReplayReasoning: true})
+	require.NoError(t, err)
+	assert.True(t, res.Completed)
+	require.Len(t, w.requests, 5)
+	assert.JSONEq(t, `{"order":["Anthropic"]}`, string(w.requests[3].Provider))
+	assert.Nil(t, w.requests[4].Provider, "the replay retry drops the pin")
+	assert.NotNil(t, w.requests[4].ToolChoice, "and still forces the terminal call")
+
+	for _, m := range w.requests[4].Messages {
+		assert.Nil(t, m.ReasoningDetails)
+	}
+}

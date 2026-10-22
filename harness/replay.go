@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"slices"
+	"strings"
 
 	"github.com/mhersson/contextmatrix-harness/events"
 	"github.com/mhersson/contextmatrix-harness/llm"
@@ -133,8 +134,41 @@ func replayRequest(req llm.Request) (llm.Request, string) {
 	return req, pin
 }
 
+// isBadRequest reports whether err is the client's HTTP 400 status error.
+func isBadRequest(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "llm endpoint status 400")
+}
+
+// carriesReasoning reports whether any message in msgs holds reasoning details.
+func carriesReasoning(msgs []llm.Message) bool {
+	return slices.ContainsFunc(msgs, llm.Message.HasReasoningDetails)
+}
+
+// failedRoutingStep extracts the gateway's error.metadata.failed_routing_step
+// from a 400 error, or "" when absent or undecodable.
+func failedRoutingStep(err error) string {
+	_, body, ok := strings.Cut(err.Error(), "llm endpoint status 400: ")
+	if !ok {
+		return ""
+	}
+
+	var env struct {
+		Error struct {
+			Metadata struct {
+				FailedRoutingStep string `json:"failed_routing_step"`
+			} `json:"metadata"`
+		} `json:"error"`
+	}
+	if json.Unmarshal([]byte(body), &env) != nil {
+		return ""
+	}
+
+	return env.Error.Metadata.FailedRoutingStep
+}
+
 // sendModel sends a turn or grace request pinned by replayRequest and emits
-// its model_request event, adding pinned_provider when a pin applies.
+// its model_request event, adding pinned_provider when a pin applies. A 400 on
+// a request that carried a pin or details is retried once without either.
 func sendModel(ctx context.Context, client llm.LLM, emit *events.Emitter, cfg Config, req llm.Request, turn int) (llm.Response, error) {
 	sent, pin := replayRequest(req)
 
@@ -145,5 +179,21 @@ func sendModel(ctx context.Context, client llm.LLM, emit *events.Emitter, cfg Co
 
 	emit.Emit(events.ModelRequest, data)
 
-	return client.SendStream(ctx, sent, cfg.OnDelta)
+	resp, err := client.SendStream(ctx, sent, cfg.OnDelta)
+	if !isBadRequest(err) || (pin == "" && !carriesReasoning(sent.Messages)) {
+		return resp, err
+	}
+
+	drop := map[string]any{"event": "replay_dropped", "status": 400, "turn": turn}
+	if step := failedRoutingStep(err); step != "" {
+		drop["failed_routing_step"] = step
+	}
+
+	emit.Emit(events.StateChange, drop)
+
+	req.Messages = withoutReasoning(req.Messages)
+
+	emit.Emit(events.ModelRequest, map[string]any{"turn": turn, "model": cfg.Model, "messages": len(req.Messages)})
+
+	return client.SendStream(ctx, req, cfg.OnDelta)
 }

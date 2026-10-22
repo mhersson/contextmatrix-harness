@@ -136,14 +136,16 @@ type Config struct {
 	// or redacts them, and drops them from History when the model changes or
 	// when its own redaction altered them. Replayed reasoning bills as input
 	// and fills the window sooner; the context stop reads the provider's
-	// prompt_tokens, which include it. An upstream that rejects the field
-	// fails the call with a 400: leave this false for that model.
+	// prompt_tokens, which include it.
 	//
 	// With replay on, each reply's details record the provider that served
 	// them (llm.Message.ReasoningProvider), and every turn request puts the
 	// provider of the newest details first in Provider's order and drops
 	// details from any other provider: signed reasoning validates only where
 	// it was produced. Provider's own only and ignore win over the pin.
+	// A 400 on a request that carried a pin or details is retried once without
+	// either; a model whose upstream rejects the field then costs one rejected
+	// request per turn, so leave replay off for it.
 	ReplayReasoning bool
 }
 

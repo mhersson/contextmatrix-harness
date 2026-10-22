@@ -4,10 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/mhersson/contextmatrix-harness/events"
@@ -385,4 +390,177 @@ func TestGraceTurnPinsReplayProvider(t *testing.T) {
 	assert.NotNil(t, grace.ToolChoice)
 	assert.Nil(t, grace.Messages[1].ReasoningDetails)
 	assert.JSONEq(t, detailsB, string(grace.Messages[5].ReasoningDetails))
+}
+
+// endpointReply is one scripted HTTP reply: an SSE body when status is 0,
+// otherwise an error body served with that status.
+type endpointReply struct {
+	status int
+	body   string
+}
+
+// scriptedEndpoint returns a real client against a server that plays replies in
+// request order and records each request body (mutex-guarded); a request past
+// the script fails the test.
+func scriptedEndpoint(t *testing.T, replies ...endpointReply) (*llm.Client, func() [][]byte) {
+	t.Helper()
+
+	var (
+		mu     sync.Mutex
+		bodies [][]byte
+	)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+
+		mu.Lock()
+		n := len(bodies)
+		bodies = append(bodies, b)
+		mu.Unlock()
+
+		if n >= len(replies) {
+			t.Errorf("unexpected request %d past the script", n+1)
+			http.Error(w, "script exhausted", http.StatusInternalServerError)
+
+			return
+		}
+
+		rep := replies[n]
+		if rep.status != 0 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(rep.status)
+			_, _ = io.WriteString(w, rep.body)
+
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, rep.body)
+	}))
+	t.Cleanup(srv.Close)
+
+	client := llm.NewClient("key", llm.WithBaseURL(srv.URL), llm.WithHTTPClient(srv.Client()))
+
+	return client, func() [][]byte {
+		mu.Lock()
+		defer mu.Unlock()
+
+		return append([][]byte(nil), bodies...)
+	}
+}
+
+type wireRequest struct {
+	Provider json.RawMessage              `json:"provider"`
+	Messages []map[string]json.RawMessage `json:"messages"`
+}
+
+const (
+	pinnedTurnSSE = `data: {"model":"m","provider":"Anthropic","choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text","text":"","signature":"sig-A","format":"anthropic-claude-v1","index":0}]}}]}` + "\n\n" +
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","type":"function","function":{"name":"read","arguments":"{\"path\":\"f.txt\"}"}}]},"finish_reason":"tool_calls"}]}` + "\n\n" +
+		"data: [DONE]\n\n"
+	doneSSE = `data: {"model":"m","provider":"Azure","choices":[{"delta":{"content":"done"},"finish_reason":"stop"}]}` + "\n\n" +
+		"data: [DONE]\n\n"
+	// Shape of the gateway's reply when no allowed endpoint accepts the signed blocks.
+	encryptedReasoning400 = `{"error":{"message":"Your request contains encrypted reasoning or compaction content that can only be processed by the provider that created it (claude-on-aws) or by azure/global, anthropic, azure/us, but your request's provider.order preference with allow_fallbacks disabled excludes all of them. Allow one of them or start a new conversation without the encrypted items.","code":400,"metadata":{"pinned_provider_slug":"claude-on-aws","accepting_provider_slugs":"azure/global,claude-on-aws,anthropic,azure/us","excluding_preferences":["request_order_without_fallbacks"],"failed_routing_step":"Filter by Encrypted Payload Endpoint"}}}`
+)
+
+func TestRunReplayBadRequestRetriesOnceWithoutPinOrDetails(t *testing.T) {
+	client, bodies := scriptedEndpoint(t,
+		endpointReply{body: pinnedTurnSSE},
+		endpointReply{status: http.StatusBadRequest, body: encryptedReasoning400},
+		endpointReply{body: doneSSE},
+	)
+
+	var transcript bytes.Buffer
+
+	res, err := Run(context.Background(), client, readReg(t), events.NewEmitter(nil, &transcript), "task", Config{
+		Model: "m", MaxTurns: 5, ReplayReasoning: true, Provider: json.RawMessage(`{"sort":"price"}`),
+	})
+	require.NoError(t, err)
+	assert.True(t, res.Completed)
+
+	got := bodies()
+	require.Len(t, got, 3)
+
+	var pinned, retried wireRequest
+	require.NoError(t, json.Unmarshal(got[1], &pinned))
+	require.NoError(t, json.Unmarshal(got[2], &retried))
+	assert.JSONEq(t, `{"order":["Anthropic"],"sort":"price"}`, string(pinned.Provider))
+	assert.JSONEq(t, sigDetails, string(pinned.Messages[1]["reasoning_details"]))
+	assert.JSONEq(t, `{"sort":"price"}`, string(retried.Provider), "the retry routes as configured")
+	assert.NotContains(t, string(got[2]), "reasoning_details")
+
+	for i, b := range got {
+		assert.NotContains(t, string(b), "reasoning_provider", "request %d", i)
+	}
+
+	var dropped, pinnedReqs int
+
+	for _, ev := range parseEvents(t, transcript.String()) {
+		switch {
+		case ev.Kind == events.StateChange && ev.Data["event"] == "replay_dropped":
+			dropped++
+
+			assert.InDelta(t, 400.0, ev.Data["status"], 0)
+			assert.Equal(t, "Filter by Encrypted Payload Endpoint", ev.Data["failed_routing_step"])
+		case ev.Kind == events.ModelRequest && ev.Data["pinned_provider"] != nil:
+			pinnedReqs++
+		}
+	}
+
+	assert.Equal(t, 1, dropped)
+	assert.Equal(t, 1, pinnedReqs, "the retry is not pinned")
+	assert.NotContains(t, transcript.String(), "sig-A", "no event carries the details")
+	assert.Equal(t, "Anthropic", res.Messages[1].ReasoningProvider, "the retry never rewrites the history")
+	assert.NotNil(t, res.Messages[1].ReasoningDetails)
+}
+
+func TestRunReplayBadRequestTwiceTakesErrorPath(t *testing.T) {
+	// An upstream rejection: no failed_routing_step in the body.
+	bad := errors.New(`llm endpoint status 400: {"error":{"message":"Provider returned error","code":400}}`)
+	fake := &burnLLM{
+		errs:      []error{nil, bad, bad},
+		responses: []llm.Response{servedBy(readTurn(sigDetails), "Anthropic")},
+	}
+
+	var transcript bytes.Buffer
+
+	res, err := Run(context.Background(), fake, readReg(t), events.NewEmitter(nil, &transcript), "task",
+		Config{MaxTurns: 5, ReplayReasoning: true})
+	require.ErrorIs(t, err, bad)
+	assert.Equal(t, "error", res.Reason)
+	assert.Len(t, fake.requests, 3, "one turn, one pinned request, exactly one retry")
+	assert.Nil(t, fake.requests[2].Provider)
+	assert.Nil(t, fake.requests[2].Messages[1].ReasoningDetails)
+	assert.Equal(t, 1, strings.Count(transcript.String(), "replay_dropped"))
+	assert.NotContains(t, transcript.String(), "failed_routing_step")
+}
+
+func TestRunNoReplayRetryWithoutPinOrDetails(t *testing.T) {
+	tests := []struct {
+		name   string
+		replay bool
+		err    error
+	}{
+		{"a 500 is not a replay rejection", true, errors.New("llm endpoint status 500: down")},
+		{"replay off never retries a 400", false, errors.New("llm endpoint status 400: rejected")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var transcript bytes.Buffer
+
+			fake := &burnLLM{
+				errs:      []error{nil, tt.err},
+				responses: []llm.Response{servedBy(readTurn(sigDetails), "Anthropic")},
+			}
+
+			res, err := Run(context.Background(), fake, readReg(t), events.NewEmitter(nil, &transcript), "task",
+				Config{MaxTurns: 5, ReplayReasoning: tt.replay})
+			require.ErrorIs(t, err, tt.err)
+			assert.Equal(t, "error", res.Reason)
+			assert.Len(t, fake.requests, 2)
+			assert.NotContains(t, transcript.String(), "replay_dropped")
+		})
+	}
 }

@@ -77,8 +77,7 @@ error and retries. If the model ends by omission instead, `CompletionArgs` is
 `History` is stripped of them and the wire is unchanged. The compaction
 summarizer never sees them; the kept tail keeps them. They are opaque and
 signed: consumers never modify or redact them, drop them from `History` when
-the model changes, and leave replay off for a model whose upstream rejects the
-field.
+the model changes.
 
 Signed reasoning validates only on the provider that produced it, so with
 replay on each reply records that provider on its message
@@ -87,7 +86,10 @@ request then puts the newest details' provider first in `Provider`'s `order`,
 keeps the consumer's other routing keys, and drops details from any other
 provider; the consumer's `only` and `ignore` win over the pin, and a fallback
 reply moves the pin. The compaction summarizer is never pinned, and the
-endpoint dialect sends no routing object.
+endpoint dialect sends no routing object. A 400 on a request that carried a pin
+or details is retried once without either and recorded as a `state_change`
+`replay_dropped` event; a model whose upstream rejects the field then costs one
+rejected request per turn, so leave replay off for it.
 
 ## Developing
 
