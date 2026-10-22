@@ -496,6 +496,8 @@ func TestRunReplayBadRequestRetriesOnceWithoutPinOrDetails(t *testing.T) {
 		assert.NotContains(t, string(b), "reasoning_provider", "request %d", i)
 	}
 
+	require.Len(t, modelRequests(t, transcript.String()), 3, "two turns plus the retry each emit a model_request")
+
 	var dropped, pinnedReqs int
 
 	for _, ev := range parseEvents(t, transcript.String()) {
@@ -563,6 +565,61 @@ func TestRunNoReplayRetryWithoutPinOrDetails(t *testing.T) {
 			assert.Equal(t, "error", res.Reason)
 			assert.Len(t, fake.requests, 2)
 			assert.NotContains(t, transcript.String(), "replay_dropped")
+		})
+	}
+}
+
+func TestRunReplayBadRequestRetriesUnpinnedDetails(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider string
+		cfg      json.RawMessage
+	}{
+		{"no provider reported", "", nil},
+		{"pin declined by ignore", "Anthropic", json.RawMessage(`{"ignore":["Anthropic"]}`)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bad := errors.New("llm endpoint status 400: rejected")
+			fake := &burnLLM{
+				errs: []error{nil, bad, nil},
+				responses: []llm.Response{
+					servedBy(readTurn(sigDetails), tt.provider),
+					{Content: "done", FinishReason: "stop"},
+				},
+			}
+
+			var transcript bytes.Buffer
+
+			res, err := Run(context.Background(), fake, readReg(t), events.NewEmitter(nil, &transcript), "task",
+				Config{MaxTurns: 5, ReplayReasoning: true, Provider: tt.cfg})
+			require.NoError(t, err)
+			assert.True(t, res.Completed)
+			require.Len(t, fake.requests, 3)
+			assert.NotNil(t, fake.requests[1].Messages[1].ReasoningDetails, "details are sent without a pin")
+			assert.Equal(t, tt.cfg, fake.requests[1].Provider)
+			assert.Equal(t, tt.cfg, fake.requests[2].Provider)
+
+			for _, m := range fake.requests[2].Messages {
+				assert.Nil(t, m.ReasoningDetails)
+			}
+
+			var dropped int
+
+			for _, ev := range parseEvents(t, transcript.String()) {
+				if ev.Kind == events.StateChange && ev.Data["event"] == "replay_dropped" {
+					dropped++
+				}
+			}
+
+			assert.Equal(t, 1, dropped)
+
+			for _, ev := range modelRequests(t, transcript.String()) {
+				assert.Nil(t, ev.Data["pinned_provider"])
+			}
+
+			assert.NotNil(t, res.Messages[1].ReasoningDetails, "the retry never rewrites the history")
 		})
 	}
 }
