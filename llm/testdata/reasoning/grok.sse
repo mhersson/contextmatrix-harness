@@ -1,0 +1,72 @@
+: OPENROUTER PROCESSING
+
+: OPENROUTER PROCESSING
+
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1792651444-cjpJK4kN3JtUxVUdCdUh","object":"chat.completion.chunk","created":1792651444,"model":"x-ai/grok-4.7","provider":"xAI","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"I'm calculating the ","reasoning_details":[{"type":"reasoning.summary","summary":"I'm calculating the ","format":"xai-responses-v1","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1792651444-cjpJK4kN3JtUxVUdCdUh","object":"chat.completion.chunk","created":1792651444,"model":"x-ai/grok-4.7","provider":"xAI","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"train's exact arrival","reasoning_details":[{"type":"reasoning.summary","summary":"train's exact arrival","format":"xai-responses-v1","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1792651444-cjpJK4kN3JtUxVUdCdUh","object":"chat.completion.chunk","created":1792651444,"model":"x-ai/grok-4.7","provider":"xAI","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" time in Oslo. The journey","reasoning_details":[{"type":"reasoning.summary","summary":" time in Oslo. The journey","format":"xai-responses-v1","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1792651444-cjpJK4kN3JtUxVUdCdUh","object":"chat.completion.chunk","created":1792651444,"model":"x-ai/grok-4.7","provider":"xAI","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" covers 496 km at 71","reasoning_details":[{"type":"reasoning.summary","summary":" covers 496 km at 71","format":"xai-responses-v1","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1792651444-cjpJK4kN3JtUxVUdCdUh","object":"chat.completion.chunk","created":1792651444,"model":"x-ai/grok-4.7","provider":"xAI","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" km/h with a 23-minute","reasoning_details":[{"type":"reasoning.summary","summary":" km/h with a 23-minute","format":"xai-responses-v1","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1792651444-cjpJK4kN3JtUxVUdCdUh","object":"chat.completion.chunk","created":1792651444,"model":"x-ai/grok-4.7","provider":"xAI","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" stop at Finse.","reasoning_details":[{"type":"reasoning.summary","summary":" stop at Finse.","format":"xai-responses-v1","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+: OPENROUTER PROCESSING
+
+: OPENROUTER PROCESSING
+
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1792651444-cjpJK4kN3JtUxVUdCdUh","object":"chat.completion.chunk","created":1792651444,"model":"x-ai/grok-4.7","provider":"xAI","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"\n\nThe pure travel time","reasoning_details":[{"type":"reasoning.summary","summary":"\n\nThe pure travel time","format":"xai-responses-v1","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1792651444-cjpJK4kN3JtUxVUdCdUh","object":"chat.completion.chunk","created":1792651444,"model":"x-ai/grok-4.7","provider":"xAI","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" is about 6 hours and","reasoning_details":[{"type":"reasoning.summary","summary":" is about 6 hours and","format":"xai-responses-v1","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1792651444-cjpJK4kN3JtUxVUdCdUh","object":"chat.completion.chunk","created":1792651444,"model":"x-ai/grok-4.7","provider":"xAI","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" 59 minutes. Adding ","reasoning_details":[{"type":"reasoning.summary","summary":" 59 minutes. Adding ","format":"xai-responses-v1","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1792651444-cjpJK4kN3JtUxVUdCdUh","object":"chat.completion.chunk","created":1792651444,"model":"x-ai/grok-4.7","provider":"xAI","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"the 23-minute stop brings","reasoning_details":[{"type":"reasoning.summary","summary":"the 23-minute stop brings","format":"xai-responses-v1","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1792651444-cjpJK4kN3JtUxVUdCdUh","object":"chat.completion.chunk","created":1792651444,"model":"x-ai/grok-4.7","provider":"xAI","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" the total to roughly","reasoning_details":[{"type":"reasoning.summary","summary":" the total to roughly","format":"xai-responses-v1","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1792651444-cjpJK4kN3JtUxVUdCdUh","object":"chat.completion.chunk","created":1792651444,"model":"x-ai/grok-4.7","provider":"xAI","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" 7 hours and 22 minutes.","reasoning_details":[{"type":"reasoning.summary","summary":" 7 hours and 22 minutes.","format":"xai-responses-v1","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1792651444-cjpJK4kN3JtUxVUdCdUh","object":"chat.completion.chunk","created":1792651444,"model":"x-ai/grok-4.7","provider":"xAI","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" The train should arrive","reasoning_details":[{"type":"reasoning.summary","summary":" The train should arrive","format":"xai-responses-v1","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1792651444-cjpJK4kN3JtUxVUdCdUh","object":"chat.completion.chunk","created":1792651444,"model":"x-ai/grok-4.7","provider":"xAI","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" around 15:02.","reasoning_details":[{"type":"reasoning.summary","summary":" around 15:02.","format":"xai-responses-v1","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+: OPENROUTER PROCESSING
+
+: OPENROUTER PROCESSING
+
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1792651444-cjpJK4kN3JtUxVUdCdUh","object":"chat.completion.chunk","created":1792651444,"model":"x-ai/grok-4.7","provider":"xAI","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"\n\nThe exact arrival ","reasoning_details":[{"type":"reasoning.summary","summary":"\n\nThe exact arrival ","format":"xai-responses-v1","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1792651444-cjpJK4kN3JtUxVUdCdUh","object":"chat.completion.chunk","created":1792651444,"model":"x-ai/grok-4.7","provider":"xAI","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"time is 15:02:34. The","reasoning_details":[{"type":"reasoning.summary","summary":"time is 15:02:34. The","format":"xai-responses-v1","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1792651444-cjpJK4kN3JtUxVUdCdUh","object":"chat.completion.chunk","created":1792651444,"model":"x-ai/grok-4.7","provider":"xAI","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" pure travel time is","reasoning_details":[{"type":"reasoning.summary","summary":" pure travel time is","format":"xai-responses-v1","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1792651444-cjpJK4kN3JtUxVUdCdUh","object":"chat.completion.chunk","created":1792651444,"model":"x-ai/grok-4.7","provider":"xAI","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" 6 hours and 59 minutes","reasoning_details":[{"type":"reasoning.summary","summary":" 6 hours and 59 minutes","format":"xai-responses-v1","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1792651444-cjpJK4kN3JtUxVUdCdUh","object":"chat.completion.chunk","created":1792651444,"model":"x-ai/grok-4.7","provider":"xAI","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" plus 11/71 of a minute.","reasoning_details":[{"type":"reasoning.summary","summary":" plus 11/71 of a minute.","format":"xai-responses-v1","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1792651444-cjpJK4kN3JtUxVUdCdUh","object":"chat.completion.chunk","created":1792651444,"model":"x-ai/grok-4.7","provider":"xAI","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":null,"reasoning_details":[{"type":"reasoning.encrypted","data":"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.eyJlbmRwb2ludF9zbHVnIjoieC1haS9ncm9rLTQuNy0yMDI2MDkxNnx4YWkifQ","format":"xai-responses-v1","id":"rs_03f849f7-fb7f-9220-9654-7d5844a9fedb","index":1}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1792651444-cjpJK4kN3JtUxVUdCdUh","object":"chat.completion.chunk","created":1792651444,"model":"x-ai/grok-4.7","provider":"xAI","choices":[{"index":0,"delta":{"content":null,"role":"assistant","tool_calls":[{"index":0,"id":"call-62742a2f-cc1b-4d59-915c-1b04a696a524-0","type":"function","function":{"name":"get_weather","arguments":""}}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1792651444-cjpJK4kN3JtUxVUdCdUh","object":"chat.completion.chunk","created":1792651444,"model":"x-ai/grok-4.7","provider":"xAI","choices":[{"index":0,"delta":{"content":null,"role":"assistant","tool_calls":[{"index":0,"function":{"arguments":""}}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1792651444-cjpJK4kN3JtUxVUdCdUh","object":"chat.completion.chunk","created":1792651444,"model":"x-ai/grok-4.7","provider":"xAI","choices":[{"index":0,"delta":{"content":null,"role":"assistant","tool_calls":[{"index":0,"function":{"arguments":"{\"city\":\"Oslo\"}"}}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1792651444-cjpJK4kN3JtUxVUdCdUh","object":"chat.completion.chunk","created":1792651444,"model":"x-ai/grok-4.7","provider":"xAI","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":null},"finish_reason":"tool_calls","native_finish_reason":"completed"}]}
+
+data: {"id":"gen-1792651444-cjpJK4kN3JtUxVUdCdUh","object":"chat.completion.chunk","created":1792651444,"model":"x-ai/grok-4.7","provider":"xAI","service_tier":"default","choices":[{"index":0,"delta":{"content":"","role":"assistant"},"finish_reason":"tool_calls","native_finish_reason":"completed"}],"usage":{"prompt_tokens":1394,"completion_tokens":671,"total_tokens":2065,"cost":0.005086,"is_byok":false,"prompt_tokens_details":{"cached_tokens":1152,"cache_write_tokens":0,"audio_tokens":0,"video_tokens":0},"cost_details":{"upstream_inference_cost":0.005086,"upstream_inference_prompt_cost":0.00106,"upstream_inference_completions_cost":0.004026},"completion_tokens_details":{"reasoning_tokens":659,"image_tokens":0,"audio_tokens":0}}}
+
+data: [DONE]
+
