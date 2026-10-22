@@ -30,12 +30,12 @@ type detailEntry struct {
 	fields   map[string]json.RawMessage
 	cat      map[string]*strings.Builder
 	verbatim json.RawMessage // a non-object fragment, kept as sent
-	typ      string          // the type the entry was created with; never overwritten
+	typ      string          // typeKey of the entry's type, set once; empty while untyped
 }
 
 func newDetailEntry(fields map[string]json.RawMessage) *detailEntry {
 	e := &detailEntry{fields: map[string]json.RawMessage{}, cat: map[string]*strings.Builder{}}
-	e.typ, _ = fragmentType(fields)
+	e.typ, _ = typeKey(fields)
 
 	for k, v := range fields {
 		if s, ok := jsonString(v); ok && concatKey(k) {
@@ -80,8 +80,8 @@ func (e *detailEntry) merge(fields map[string]json.RawMessage) {
 // detailsAccumulator merges streamed reasoning_details fragments per index.
 // The provider-side signature check covers the assembled entries, so unknown
 // keys are carried through untouched. A fragment of a different non-empty type
-// is a separate signed block and starts a new entry, as the gateway's
-// non-streamed reply lists them.
+// is a separate block and starts a new entry, as the gateway's non-streamed
+// reply lists them; an untyped entry adopts the first type it sees.
 type detailsAccumulator struct {
 	entries []*detailEntry
 	byIndex map[int]int
@@ -119,7 +119,9 @@ func (a *detailsAccumulator) add(frag json.RawMessage) {
 	}
 
 	e := a.entries[pos]
-	if t, ok := fragmentType(fields); ok && t != e.typ {
+
+	t, typed := typeKey(fields)
+	if typed && e.typ != "" && t != e.typ {
 		a.byIndex[idx] = len(a.entries)
 		a.entries = append(a.entries, newDetailEntry(fields))
 
@@ -127,14 +129,25 @@ func (a *detailsAccumulator) add(frag json.RawMessage) {
 	}
 
 	e.merge(fields)
+
+	if typed && e.typ == "" {
+		e.typ = t
+	}
 }
 
-// fragmentType returns a fragment's non-empty string type; absent, null and
-// empty types report false and continue the latest entry.
-func fragmentType(fields map[string]json.RawMessage) (string, bool) {
-	s, ok := jsonString(fields["type"])
+// typeKey returns a comparable key for a fragment's non-empty type value of
+// any JSON kind; absent, null and "" report false and continue the latest entry.
+func typeKey(fields map[string]json.RawMessage) (string, bool) {
+	raw := fields["type"]
+	if emptyJSON(raw) {
+		return "", false
+	}
 
-	return s, ok && s != ""
+	if s, ok := jsonString(raw); ok {
+		return "s" + s, true
+	}
+
+	return "r" + string(bytes.TrimSpace(raw)), true
 }
 
 // integerIndex reports a JSON integer; null, strings and floats are not indexes.

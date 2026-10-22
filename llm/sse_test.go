@@ -398,6 +398,23 @@ func TestParseStreamAssemblesReasoningDetails(t *testing.T) {
 			want: `[{"type":"reasoning.text","text":"A","index":0},{"type":"reasoning.encrypted","data":"QUJD","index":0},{"type":"reasoning.text","text":"BC","index":0}]`,
 		},
 		{
+			name: "an untyped entry adopts the first type it sees",
+			frames: []string{
+				detailsFrame(`[{"text":"A","index":0}]`),
+				detailsFrame(`[{"type":"reasoning.text","text":"B","signature":"s","index":0}]`),
+				detailsFrame(`[{"type":"reasoning.encrypted","data":"X","index":0}]`),
+			},
+			want: `[{"index":0,"type":"reasoning.text","text":"AB","signature":"s"},{"type":"reasoning.encrypted","data":"X","index":0}]`,
+		},
+		{
+			name: "a non-string type never overwrites a typed entry",
+			frames: []string{
+				detailsFrame(`[{"type":"reasoning.text","text":"A","index":0}]`),
+				detailsFrame(`[{"type":5,"text":"B","index":0}]`),
+			},
+			want: `[{"type":"reasoning.text","text":"A","index":0},{"type":5,"text":"B","index":0}]`,
+		},
+		{
 			name:   "a null fragment is skipped and a non-object one kept verbatim",
 			frames: []string{detailsFrame(`[null,"opaque",{"type":"reasoning.text","text":"A","index":0}]`)},
 			want:   `["opaque",{"type":"reasoning.text","text":"A","index":0}]`,
