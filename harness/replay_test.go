@@ -120,3 +120,106 @@ func TestWithoutReasoningNeverWritesInput(t *testing.T) {
 	assert.JSONEq(t, sigDetails, string(in[0].ReasoningDetails))
 	assert.Empty(t, append([]llm.Message(nil), withoutReasoning(nil)...))
 }
+
+func TestPinProvider(t *testing.T) {
+	const pin = "Claude Platform on AWS"
+
+	tests := []struct {
+		name, raw, want string // want "" = not pinned, raw returned unchanged
+	}{
+		{"unset becomes an order", "", `{"order":["Claude Platform on AWS"]}`},
+		{"null becomes an order", "null", `{"order":["Claude Platform on AWS"]}`},
+		{
+			"consumer keys are kept", `{"sort":"price","allow_fallbacks":false,"require_parameters":true,"x_new":{"k":1}}`,
+			`{"order":["Claude Platform on AWS"],"sort":"price","allow_fallbacks":false,"require_parameters":true,"x_new":{"k":1}}`,
+		},
+		{
+			"pin leads the consumer order without a duplicate", `{"order":["Wafer","Claude Platform on AWS","Azure"]}`,
+			`{"order":["Claude Platform on AWS","Wafer","Azure"]}`,
+		},
+		{
+			"only that admits the pin", `{"only":["Anthropic","Claude Platform on AWS"]}`,
+			`{"only":["Anthropic","Claude Platform on AWS"],"order":["Claude Platform on AWS"]}`,
+		},
+		{"ignore that names others", `{"ignore":["Azure"]}`, `{"ignore":["Azure"],"order":["Claude Platform on AWS"]}`},
+		{"only that excludes the pin", `{"only":["Anthropic"]}`, ""},
+		{"ignore that names the pin", `{"ignore":["Claude Platform on AWS"]}`, ""},
+		{"names match exactly", `{"only":["claude platform on aws"]}`, ""},
+		{"not an object", `["Anthropic"]`, ""},
+		{"order not a string list", `{"order":"Anthropic"}`, ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := pinProvider(json.RawMessage(tt.raw), pin)
+			if tt.want == "" {
+				assert.False(t, ok)
+				assert.Equal(t, tt.raw, string(got), "an unpinned provider is sent as configured")
+
+				return
+			}
+
+			assert.True(t, ok)
+			assert.JSONEq(t, tt.want, string(got))
+		})
+	}
+}
+
+const (
+	detailsA = `[{"type":"reasoning.text","text":"a","index":0}]`
+	detailsB = `[{"type":"reasoning.text","text":"b","index":0}]`
+)
+
+func TestReplayPin(t *testing.T) {
+	tests := []struct {
+		name string
+		msgs []llm.Message
+		want string
+	}{
+		{"none", []llm.Message{{Role: "user", Content: "q"}}, ""},
+		{"newest details decide", []llm.Message{
+			{Role: "assistant", ReasoningDetails: json.RawMessage(detailsA), ReasoningProvider: "Wafer"},
+			{Role: "assistant", ReasoningDetails: json.RawMessage(detailsB), ReasoningProvider: "Anthropic"},
+			{Role: "tool", Content: "r"},
+		}, "Anthropic"},
+		{"a provider without details pins nothing", []llm.Message{
+			{Role: "assistant", ReasoningDetails: json.RawMessage(detailsA), ReasoningProvider: "Wafer"},
+			{Role: "assistant", ReasoningProvider: "Anthropic"},
+		}, "Wafer"},
+		{"newest details without a provider pin nothing", []llm.Message{
+			{Role: "assistant", ReasoningDetails: json.RawMessage(detailsA), ReasoningProvider: "Wafer"},
+			{Role: "assistant", ReasoningDetails: json.RawMessage(detailsB)},
+		}, ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, replayPin(tt.msgs))
+		})
+	}
+}
+
+func TestReplayRequest(t *testing.T) {
+	msgs := []llm.Message{
+		{Role: "assistant", Content: "1", ReasoningDetails: json.RawMessage(detailsA), ReasoningProvider: "Wafer"},
+		{Role: "assistant", Content: "2", ReasoningDetails: json.RawMessage(sigDetails)},
+		{Role: "assistant", Content: "3", ReasoningDetails: json.RawMessage(detailsB), ReasoningProvider: "Anthropic"},
+	}
+	in := llm.Request{Model: "m", Provider: json.RawMessage(`{"sort":"price"}`), Messages: msgs}
+
+	out, pin := replayRequest(in)
+	assert.Equal(t, "Anthropic", pin)
+	assert.JSONEq(t, `{"order":["Anthropic"],"sort":"price"}`, string(out.Provider))
+	assert.Nil(t, out.Messages[0].ReasoningDetails, "another provider's details are dropped")
+	assert.Nil(t, out.Messages[1].ReasoningDetails, "details without provenance are dropped")
+	assert.JSONEq(t, detailsB, string(out.Messages[2].ReasoningDetails))
+	assert.JSONEq(t, detailsA, string(msgs[0].ReasoningDetails), "the caller's messages are never modified")
+	assert.JSONEq(t, `{"sort":"price"}`, string(in.Provider))
+
+	excluded := in
+	excluded.Provider = json.RawMessage(`{"ignore":["Anthropic"]}`)
+
+	out, pin = replayRequest(excluded)
+	assert.Empty(t, pin)
+	assert.Equal(t, excluded, out, "a declined pin leaves the request exactly as built")
+}
