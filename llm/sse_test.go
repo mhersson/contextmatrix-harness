@@ -2,6 +2,8 @@ package llm
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -482,4 +484,29 @@ func TestDetailsAccumulatorLinearInFragments(t *testing.T) {
 	large := allocatedBy(t, 20000)
 
 	assert.Less(t, large, small*8, "allocation grew faster than linearly: %d -> %d bytes", small, large)
+}
+
+// The goldens are the parser's own output that the provider accepted on
+// replay; this pins that accepted form against the captured streams.
+func TestParseStreamCapturedReasoningFixtures(t *testing.T) {
+	paths, err := filepath.Glob("testdata/reasoning/*.sse")
+	require.NoError(t, err)
+	require.NotEmpty(t, paths)
+
+	for _, p := range paths {
+		t.Run(filepath.Base(p), func(t *testing.T) {
+			f, err := os.Open(p)
+			require.NoError(t, err)
+
+			defer f.Close() //nolint:errcheck
+
+			resp, err := parseStream(f, nil)
+			require.NoError(t, err)
+			require.NotEmpty(t, resp.ToolCalls)
+
+			want, err := os.ReadFile(strings.TrimSuffix(p, ".sse") + ".details.json")
+			require.NoError(t, err)
+			assert.JSONEq(t, string(want), string(resp.ReasoningDetails))
+		})
+	}
 }

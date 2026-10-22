@@ -1,0 +1,30 @@
+data: {"id":"gen-1792646786-I3YGP3v6HGijk3AKbggn","object":"chat.completion.chunk","created":1792646786,"model":"deepseek/deepseek-v4-flash","provider":"Wafer","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"The","reasoning_details":[{"type":"reasoning.text","text":"The","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1792646786-I3YGP3v6HGijk3AKbggn","object":"chat.completion.chunk","created":1792646786,"model":"deepseek/deepseek-v4-flash","provider":"Wafer","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" user wants to know if they","reasoning_details":[{"type":"reasoning.text","text":" user wants to know if they","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1792646786-I3YGP3v6HGijk3AKbggn","object":"chat.completion.chunk","created":1792646786,"model":"deepseek/deepseek-v4-flash","provider":"Wafer","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" should bring an umbrella in Oslo","reasoning_details":[{"type":"reasoning.text","text":" should bring an umbrella in Oslo","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1792646786-I3YGP3v6HGijk3AKbggn","object":"chat.completion.chunk","created":1792646786,"model":"deepseek/deepseek-v4-flash","provider":"Wafer","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" today. I need to check","reasoning_details":[{"type":"reasoning.text","text":" today. I need to check","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1792646786-I3YGP3v6HGijk3AKbggn","object":"chat.completion.chunk","created":1792646786,"model":"deepseek/deepseek-v4-flash","provider":"Wafer","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" the weather using","reasoning_details":[{"type":"reasoning.text","text":" the weather using","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1792646786-I3YGP3v6HGijk3AKbggn","object":"chat.completion.chunk","created":1792646786,"model":"deepseek/deepseek-v4-flash","provider":"Wafer","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" the tool. Let me get","reasoning_details":[{"type":"reasoning.text","text":" the tool. Let me get","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1792646786-I3YGP3v6HGijk3AKbggn","object":"chat.completion.chunk","created":1792646786,"model":"deepseek/deepseek-v4-flash","provider":"Wafer","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" the weather for Oslo.","reasoning_details":[{"type":"reasoning.text","text":" the weather for Oslo.","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1792646786-I3YGP3v6HGijk3AKbggn","object":"chat.completion.chunk","created":1792646786,"model":"deepseek/deepseek-v4-flash","provider":"Wafer","choices":[{"index":0,"delta":{"content":null,"role":"assistant","tool_calls":[{"index":0,"id":"call_477db1e96444413ab16a64e6","type":"function","function":{"name":"get_weather","arguments":""}}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1792646786-I3YGP3v6HGijk3AKbggn","object":"chat.completion.chunk","created":1792646786,"model":"deepseek/deepseek-v4-flash","provider":"Wafer","choices":[{"index":0,"delta":{"content":null,"role":"assistant","tool_calls":[{"index":0,"function":{"arguments":""}}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1792646786-I3YGP3v6HGijk3AKbggn","object":"chat.completion.chunk","created":1792646786,"model":"deepseek/deepseek-v4-flash","provider":"Wafer","choices":[{"index":0,"delta":{"content":null,"role":"assistant","tool_calls":[{"index":0,"function":{"arguments":"{"}}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1792646786-I3YGP3v6HGijk3AKbggn","object":"chat.completion.chunk","created":1792646786,"model":"deepseek/deepseek-v4-flash","provider":"Wafer","choices":[{"index":0,"delta":{"content":null,"role":"assistant","tool_calls":[{"index":0,"function":{"arguments":"\"city\": \"Os"}}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1792646786-I3YGP3v6HGijk3AKbggn","object":"chat.completion.chunk","created":1792646786,"model":"deepseek/deepseek-v4-flash","provider":"Wafer","choices":[{"index":0,"delta":{"content":null,"role":"assistant","tool_calls":[{"index":0,"function":{"arguments":"lo\"}"}}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1792646786-I3YGP3v6HGijk3AKbggn","object":"chat.completion.chunk","created":1792646786,"model":"deepseek/deepseek-v4-flash","provider":"Wafer","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":null},"finish_reason":"tool_calls","native_finish_reason":"tool_calls"}]}
+
+data: {"id":"gen-1792646786-I3YGP3v6HGijk3AKbggn","object":"chat.completion.chunk","created":1792646786,"model":"deepseek/deepseek-v4-flash","provider":"Wafer","service_tier":null,"choices":[{"index":0,"delta":{"content":"","role":"assistant"},"finish_reason":"tool_calls","native_finish_reason":"tool_calls"}],"usage":{"prompt_tokens":298,"completion_tokens":80,"total_tokens":378,"cost":0.0002222,"is_byok":false,"prompt_tokens_details":{"cached_tokens":0,"cache_write_tokens":0,"audio_tokens":0,"video_tokens":0},"cost_details":{"upstream_inference_cost":0.0002222,"upstream_inference_prompt_cost":0.0002086,"upstream_inference_completions_cost":0.0000136},"completion_tokens_details":{"reasoning_tokens":34,"image_tokens":0,"audio_tokens":0}}}
+
+data: [DONE]
+
