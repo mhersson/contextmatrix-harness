@@ -1,6 +1,9 @@
 package llm
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"slices"
+)
 
 // Dialect selects the wire format the client speaks. Both dialects target the
 // OpenAI-compatible /chat/completions shape; they differ only in a few
@@ -28,8 +31,11 @@ type streamOptions struct {
 // models, usage, the reasoning object, cache_control) and renders reasoning +
 // streamed-usage in OpenAI-native form. Both paths marshal the SAME struct, so a
 // future Request field reaches both dialects unless explicitly stripped here.
-// reasoning_details on messages reaches both dialects by design.
+// reasoning_details on messages reaches both dialects by design;
+// reasoning_provider is persistence-only and never sent.
 func encodeRequest(req Request, d Dialect) ([]byte, error) {
+	req.Messages = withoutReasoningProvider(req.Messages)
+
 	if d == DialectOpenAI {
 		req.ReasoningEffort = extractReasoningEffort(req.Reasoning)
 
@@ -42,6 +48,22 @@ func encodeRequest(req Request, d Dialect) ([]byte, error) {
 	}
 
 	return json.Marshal(req)
+}
+
+// withoutReasoningProvider returns msgs itself when no message records a
+// provider, otherwise a copy with the field cleared; the caller's slice is
+// never written.
+func withoutReasoningProvider(msgs []Message) []Message {
+	if !slices.ContainsFunc(msgs, func(m Message) bool { return m.ReasoningProvider != "" }) {
+		return msgs
+	}
+
+	out := slices.Clone(msgs)
+	for i := range out {
+		out[i].ReasoningProvider = ""
+	}
+
+	return out
 }
 
 // extractReasoningEffort pulls the effort string out of an OpenRouter-shaped

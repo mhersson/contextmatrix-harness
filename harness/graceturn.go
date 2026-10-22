@@ -43,7 +43,7 @@ func graceFinish(ctx context.Context, client llm.LLM, reg *tools.Registry, emit 
 	}
 
 	resp, err := sendTurn(ctx, client, emit, cfg, msgs, termSchemas, choice, res)
-	if err != nil && strings.Contains(err.Error(), "llm endpoint status 400") {
+	if isBadRequest(err) {
 		// Some OpenAI-compatible gateways reject tool_choice for some models; the
 		// client surfaces a 400 as a terminal error, so retry once without the
 		// forcing and fall back to the instruction-only contract.
@@ -143,9 +143,8 @@ func sendTurn(ctx context.Context, client llm.LLM, emit *events.Emitter, cfg Con
 		Tools:      toolSchemas,
 		ToolChoice: choice,
 	}
-	emit.Emit(events.ModelRequest, map[string]any{"turn": res.Turns, "model": cfg.Model, "messages": len(msgs)})
 
-	resp, err := client.SendStream(ctx, req, cfg.OnDelta)
+	resp, err := sendModel(ctx, client, emit, cfg, req, res.Turns)
 	if err != nil {
 		return resp, err
 	}

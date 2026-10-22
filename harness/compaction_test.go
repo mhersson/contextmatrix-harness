@@ -505,3 +505,29 @@ func TestCompactFailureKeepsReasoningAndStopsOnProviderCount(t *testing.T) {
 
 	assert.Equal(t, 10, withDetails, "a failed compaction leaves every seeded block in place")
 }
+
+func TestCompactionRequestIsNeverPinned(t *testing.T) {
+	history := replayHistory20()
+	for i := range history {
+		if history[i].Role == "assistant" {
+			history[i].ReasoningProvider = "Wafer"
+		}
+	}
+
+	fake := &capturingLLMSeq{responses: []llm.Response{
+		{Content: "turn1", Usage: llm.Usage{PromptTokens: 900}}, // triggers compaction
+		{Content: "SUMMARY"},
+		{Content: "done", FinishReason: "stop"},
+	}}
+
+	_, err := Run(context.Background(), fake, tools.NewRegistry(), newEmitter(), "go", Config{
+		MaxTurns: 10, SystemPrompt: "SYS", ContextWindow: 1000, Provider: json.RawMessage(`{"sort":"price"}`),
+		Compaction: &Compaction{Threshold: 0.85, KeepRecentTurns: 3},
+		History:    history, ReplayReasoning: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, fake.requests, 3)
+	assert.JSONEq(t, `{"order":["Wafer"],"sort":"price"}`, string(fake.requests[0].Provider))
+	assert.JSONEq(t, `{"sort":"price"}`, string(fake.requests[1].Provider), "the summarizer routes as configured")
+	assert.JSONEq(t, `{"order":["Wafer"],"sort":"price"}`, string(fake.requests[2].Provider), "the kept tail pins again")
+}

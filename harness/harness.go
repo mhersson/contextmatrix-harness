@@ -136,8 +136,18 @@ type Config struct {
 	// or redacts them, and drops them from History when the model changes or
 	// when its own redaction altered them. Replayed reasoning bills as input
 	// and fills the window sooner; the context stop reads the provider's
-	// prompt_tokens, which include it. An upstream that rejects the field
-	// fails the call with a 400: leave this false for that model.
+	// prompt_tokens, which include it.
+	//
+	// With replay on, each reply's details record the provider that served
+	// them (llm.Message.ReasoningProvider), and every turn request puts the
+	// provider of the newest details first in Provider's order and drops
+	// details from any other provider: signed reasoning validates only where
+	// it was produced. Provider's own only and ignore win over the pin; their
+	// entries are compared verbatim (case included) with the reported provider
+	// name, so prefer order over only and ignore with replay on.
+	// A 400 on a request that carried a pin or details is retried once without
+	// either; a model whose upstream rejects the field then costs one rejected
+	// request per turn, so leave replay off for it.
 	ReplayReasoning bool
 }
 
@@ -369,9 +379,8 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 			Messages:  msgs,
 			Tools:     reg.Schemas(),
 		}
-		emit.Emit(events.ModelRequest, map[string]any{"turn": res.Turns, "model": cfg.Model, "messages": len(msgs)})
 
-		resp, err := client.SendStream(ctx, req, cfg.OnDelta)
+		resp, err := sendModel(ctx, client, emit, cfg, req, res.Turns)
 		if err != nil {
 			if stop, ferr := failTurn(err); stop {
 				return res, ferr
@@ -518,6 +527,9 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 		asst := llm.Message{Role: "assistant", Content: resp.Content, ToolCalls: resp.ToolCalls}
 		if cfg.ReplayReasoning {
 			asst.ReasoningDetails = resp.ReasoningDetails
+			if resp.ReasoningDetails != nil {
+				asst.ReasoningProvider = resp.Provider
+			}
 		}
 
 		msgs = append(msgs, asst)

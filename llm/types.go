@@ -20,6 +20,16 @@ type Message struct {
 	// ReasoningDetails is the provider's reasoning_details array for an
 	// assistant reply, replayed verbatim. It is opaque and signed: never modify it.
 	ReasoningDetails json.RawMessage `json:"reasoning_details,omitempty"`
+	// ReasoningProvider is the provider that served the reply whose
+	// ReasoningDetails this message carries, as the gateway reported it;
+	// persisted with the message, never sent.
+	ReasoningProvider string `json:"reasoning_provider,omitempty"`
+}
+
+// HasReasoningDetails reports whether ReasoningDetails would be sent: a
+// non-empty JSON array.
+func (m Message) HasReasoningDetails() bool {
+	return replayableDetails(m.ReasoningDetails) != nil
 }
 
 // MarshalJSON emits `content` as the parts array when ContentParts is set,
@@ -29,20 +39,22 @@ type Message struct {
 // Completions contract requires assistant content unless tool_calls is
 // present, and strict OpenAI-compatible endpoints reject a bare
 // {"role":"assistant"} on every replay of the history. reasoning_details is
-// emitted only when it is a non-empty JSON array.
+// emitted only when it is a non-empty JSON array. reasoning_provider is emitted
+// for persistence; encodeRequest removes it.
 func (m Message) MarshalJSON() ([]byte, error) {
 	type wire struct {
-		Role             string          `json:"role"`
-		Content          any             `json:"content,omitempty"`
-		ToolCalls        []ToolCall      `json:"tool_calls,omitempty"`
-		ReasoningDetails json.RawMessage `json:"reasoning_details,omitempty"`
-		ToolCallID       string          `json:"tool_call_id,omitempty"`
-		Name             string          `json:"name,omitempty"`
+		Role              string          `json:"role"`
+		Content           any             `json:"content,omitempty"`
+		ToolCalls         []ToolCall      `json:"tool_calls,omitempty"`
+		ReasoningDetails  json.RawMessage `json:"reasoning_details,omitempty"`
+		ReasoningProvider string          `json:"reasoning_provider,omitempty"`
+		ToolCallID        string          `json:"tool_call_id,omitempty"`
+		Name              string          `json:"name,omitempty"`
 	}
 
 	w := wire{
 		Role: m.Role, ToolCalls: m.ToolCalls, ReasoningDetails: replayableDetails(m.ReasoningDetails),
-		ToolCallID: m.ToolCallID, Name: m.Name,
+		ReasoningProvider: m.ReasoningProvider, ToolCallID: m.ToolCallID, Name: m.Name,
 	}
 	switch {
 	case len(m.ContentParts) > 0:
