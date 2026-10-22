@@ -115,3 +115,58 @@ func TestExtractReasoningEffort(t *testing.T) {
 	assert.Empty(t, extractReasoningEffort(json.RawMessage(`{"max_tokens":100}`)))
 	assert.Equal(t, "xhigh", extractReasoningEffort(json.RawMessage(`{"effort":"xhigh"}`)))
 }
+
+func replayHistory() Request {
+	return Request{
+		Model: "m",
+		Messages: []Message{
+			{Role: "system", Content: "sys"},
+			{Role: "user", Content: "task"},
+			{Role: "assistant", ToolCalls: []ToolCall{{ID: "c1", Type: "function", Function: FunctionCall{Name: "read", Arguments: `{"path":"a"}`}}}},
+			{Role: "tool", ToolCallID: "c1", Content: "data"},
+			{Role: "assistant", Content: "done"},
+		},
+		Reasoning: json.RawMessage(`{"effort":"high"}`),
+		Stream:    true,
+		Usage:     &UsageOpt{Include: true},
+	}
+}
+
+// The request body is the provider's wire contract: a message without
+// reasoning_details must encode exactly as it did before the field existed.
+func TestEncodeRequestWireUnchangedWithoutReasoningDetails(t *testing.T) {
+	want := map[Dialect]string{
+		DialectOpenRouter: `{"model":"m","messages":[{"role":"system","content":"sys"},{"role":"user","content":"task"},{"role":"assistant","tool_calls":[{"id":"c1","type":"function","function":{"name":"read","arguments":"{\"path\":\"a\"}"}}]},{"role":"tool","content":"data","tool_call_id":"c1"},{"role":"assistant","content":"done"}],"stream":true,"reasoning":{"effort":"high"},"usage":{"include":true},"cache_control":{"type":"ephemeral"}}`,
+		DialectOpenAI:     `{"model":"m","messages":[{"role":"system","content":"sys"},{"role":"user","content":"task"},{"role":"assistant","tool_calls":[{"id":"c1","type":"function","function":{"name":"read","arguments":"{\"path\":\"a\"}"}}]},{"role":"tool","content":"data","tool_call_id":"c1"},{"role":"assistant","content":"done"}],"stream":true,"reasoning_effort":"high","stream_options":{"include_usage":true}}`,
+	}
+
+	for d, w := range want {
+		b, err := encodeRequest(replayHistory(), d)
+		require.NoError(t, err)
+		assert.Equal(t, w, string(b), "dialect %v", d)
+	}
+}
+
+func TestEncodeRequestSendsReasoningDetailsOnBothDialects(t *testing.T) {
+	for _, d := range []Dialect{DialectOpenRouter, DialectOpenAI} {
+		req := replayHistory()
+		req.Messages[2].ReasoningDetails = json.RawMessage(testDetails)
+
+		b, err := encodeRequest(req, d)
+		require.NoError(t, err)
+
+		var body struct {
+			Messages []map[string]json.RawMessage `json:"messages"`
+		}
+		require.NoError(t, json.Unmarshal(b, &body))
+
+		assert.JSONEq(t, testDetails, string(body.Messages[2]["reasoning_details"]), "dialect %v", d)
+		assert.Contains(t, body.Messages[2], "tool_calls", "dialect %v", d)
+
+		for i, m := range body.Messages {
+			if i != 2 {
+				assert.NotContains(t, m, "reasoning_details", "dialect %v message %d", d, i)
+			}
+		}
+	}
+}

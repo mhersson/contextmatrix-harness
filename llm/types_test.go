@@ -156,3 +156,52 @@ func TestUsageBuckets(t *testing.T) {
 		})
 	}
 }
+
+// testDetails mimics a Claude 5.x block: empty text, signature set.
+const testDetails = `[{"type":"reasoning.text","text":"","signature":"sig-A","format":"anthropic-claude-v1","index":0}]`
+
+func TestMessageJSONRoundTripKeepsReasoningDetails(t *testing.T) {
+	in := Message{
+		Role:             "assistant",
+		ToolCalls:        []ToolCall{{ID: "c1", Type: "function", Function: FunctionCall{Name: "read", Arguments: "{}"}}},
+		ReasoningDetails: json.RawMessage(testDetails),
+	}
+
+	b, err := json.Marshal(in)
+	require.NoError(t, err)
+
+	var out Message
+	require.NoError(t, json.Unmarshal(b, &out))
+	assert.JSONEq(t, testDetails, string(out.ReasoningDetails))
+}
+
+func TestMessageReasoningDetailsOmittedUnlessNonEmptyArray(t *testing.T) {
+	for _, raw := range []string{"", "null", "[]", " [ ] ", `{"type":"reasoning.text"}`} {
+		b, err := json.Marshal(Message{Role: "assistant", Content: "x", ReasoningDetails: json.RawMessage(raw)})
+		require.NoError(t, err)
+		assert.JSONEq(t, `{"role":"assistant","content":"x"}`, string(b), "raw %q", raw)
+	}
+}
+
+func TestUsageReasoningTokens(t *testing.T) {
+	tests := []struct {
+		name, body string
+		want       int
+	}{
+		{"reported", `{"completion_tokens":10,"completion_tokens_details":{"reasoning_tokens":7}}`, 7},
+		{"absent", `{"completion_tokens":10}`, 0},
+		{"null details", `{"completion_tokens":10,"completion_tokens_details":null}`, 0},
+		{"integral float", `{"completion_tokens":10,"completion_tokens_details":{"reasoning_tokens":1.0}}`, 1},
+		{"string value", `{"completion_tokens":10,"completion_tokens_details":{"reasoning_tokens":"3"}}`, 0},
+		{"array details", `{"completion_tokens":10,"completion_tokens_details":[]}`, 0},
+		{"object without key", `{"completion_tokens":10,"completion_tokens_details":{}}`, 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var u Usage
+			require.NoError(t, json.Unmarshal([]byte(tt.body), &u))
+			assert.Equal(t, tt.want, u.ReasoningTokens())
+		})
+	}
+}

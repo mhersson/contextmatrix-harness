@@ -28,6 +28,7 @@ type streamOptions struct {
 // models, usage, the reasoning object, cache_control) and renders reasoning +
 // streamed-usage in OpenAI-native form. Both paths marshal the SAME struct, so a
 // future Request field reaches both dialects unless explicitly stripped here.
+// reasoning_details on messages reaches both dialects by design.
 func encodeRequest(req Request, d Dialect) ([]byte, error) {
 	if d == DialectOpenAI {
 		req.ReasoningEffort = extractReasoningEffort(req.Reasoning)

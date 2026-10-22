@@ -83,7 +83,7 @@ func compact(ctx context.Context, client llm.LLM, cfg Config, msgs []llm.Message
 		Provider: cfg.Provider,
 		Messages: append([]llm.Message{
 			{Role: "system", Content: compactionPrompt},
-		}, older...),
+		}, withoutReasoning(older)...),
 	}
 
 	resp, err := client.Send(ctx, req)
@@ -94,6 +94,8 @@ func compact(ctx context.Context, client llm.LLM, cfg Config, msgs []llm.Message
 	out := make([]llm.Message, 0, sysCount+1+len(msgs)-b)
 	out = append(out, msgs[:sysCount]...)
 	out = append(out, llm.Message{Role: "user", Content: "[Earlier conversation, summarized]\n" + resp.Content})
+	// The tail is the live tool loop and keeps its reasoning (Gemini validates
+	// signatures within the current turn); a direct-Anthropic path would need it stripped too.
 	out = append(out, msgs[b:]...)
 
 	emit.Emit(events.StateChange, map[string]any{

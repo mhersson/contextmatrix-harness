@@ -127,6 +127,18 @@ type Config struct {
 	// OpenAI image_url content parts (after the task text). nil = text-only,
 	// byte-identical to prior behavior.
 	TaskImages []llm.ImageURL
+	// ReplayReasoning, when true, sends each assistant reply's
+	// reasoning_details back verbatim on that message in every later request,
+	// on both dialects, so a reasoning model continues from its own thinking.
+	// When false (the default) no reasoning_details are sent and those on
+	// seeded History are dropped, so the wire matches a run without replay.
+	// The details are opaque and signed: a consumer never modifies, reorders
+	// or redacts them, and drops them from History when the model changes or
+	// when its own redaction altered them. Replayed reasoning bills as input
+	// and fills the window sooner; the context stop reads the provider's
+	// prompt_tokens, which include it. An upstream that rejects the field
+	// fails the call with a 400: leave this false for that model.
+	ReplayReasoning bool
 }
 
 type Result struct {
@@ -232,7 +244,11 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 		msgs = append(msgs, llm.Message{Role: "system", Content: cfg.SystemPrompt})
 	}
 
-	msgs = append(msgs, cfg.History...)
+	if cfg.ReplayReasoning {
+		msgs = append(msgs, cfg.History...)
+	} else {
+		msgs = append(msgs, withoutReasoning(cfg.History)...)
+	}
 
 	msgs = append(msgs, seedMessage(task, cfg.TaskImages))
 
@@ -401,6 +417,8 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 			// mixed-version fleet without changing the meaning of the
 			// existing prompt_tokens field.
 			"wire_prompt_tokens": resp.Usage.PromptTokens,
+			// A subset of completion_tokens, not a separate bucket.
+			"reasoning_tokens": resp.Usage.ReasoningTokens(),
 		}, resp.Provider))
 
 		if cfg.ContextWindow > 0 {
@@ -425,6 +443,7 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 							"cost_usd": cUsage.Cost, "model": cfg.Model, "phase": "compaction",
 							"cache_read_tokens": cCacheRead, "cache_creation_tokens": cCacheCreation,
 							"wire_prompt_tokens": cUsage.PromptTokens,
+							"reasoning_tokens":   cUsage.ReasoningTokens(),
 						}, cResp.Provider))
 					}
 
@@ -496,7 +515,12 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 
 		emptyRun = 0
 
-		msgs = append(msgs, llm.Message{Role: "assistant", Content: resp.Content, ToolCalls: resp.ToolCalls})
+		asst := llm.Message{Role: "assistant", Content: resp.Content, ToolCalls: resp.ToolCalls}
+		if cfg.ReplayReasoning {
+			asst.ReasoningDetails = resp.ReasoningDetails
+		}
+
+		msgs = append(msgs, asst)
 
 		// Authoritative: tool_calls presence drives continuation, not finish_reason.
 		if len(resp.ToolCalls) == 0 {

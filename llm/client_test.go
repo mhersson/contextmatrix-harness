@@ -343,3 +343,67 @@ func TestSendStreamResetPrecedesReplay(t *testing.T) {
 		})
 	}
 }
+
+func TestSendCapturesReasoningDetails(t *testing.T) {
+	tests := []struct {
+		name, details, want string // details "" = key absent; want "" = nil
+	}{
+		{"array verbatim", testDetails, testDetails},
+		{"null", "null", ""},
+		{"empty array", "[]", ""},
+		{"absent", "", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := `{"role":"assistant","content":"hi"`
+			if tt.details != "" {
+				msg += `,"reasoning_details":` + tt.details
+			}
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				io.WriteString(w, `{"model":"m","choices":[{"finish_reason":"stop","message":`+msg+`}}]}`) //nolint:errcheck
+			}))
+			defer srv.Close()
+
+			resp, err := NewClient("k", WithBaseURL(srv.URL)).Send(context.Background(), Request{Model: "m"})
+			require.NoError(t, err)
+
+			if tt.want == "" {
+				assert.Nil(t, resp.ReasoningDetails)
+
+				return
+			}
+
+			assert.Equal(t, tt.want, string(resp.ReasoningDetails))
+		})
+	}
+}
+
+func TestSendStreamReplayDoesNotDuplicateReasoningDetails(t *testing.T) {
+	partial := `data: {"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text","text":"A","index":0}]}}]}` + "\n"
+	fail := `data: {"error":{"message":"Upstream idle timeout exceeded"}}` + "\n"
+	full := partial + `data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}` + "\n" + "data: [DONE]\n"
+
+	var requests atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+
+		if requests.Add(1) == 1 {
+			io.WriteString(w, partial+fail) //nolint:errcheck
+
+			return
+		}
+
+		io.WriteString(w, full) //nolint:errcheck
+	}))
+	defer srv.Close()
+
+	c := NewClient("k", WithBaseURL(srv.URL), WithRetry(RetryPolicy{MaxRetries: 1, BaseDelay: time.Millisecond}))
+
+	resp, err := c.SendStream(context.Background(), Request{Model: "m"}, nil)
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, requests.Load())
+	assert.JSONEq(t, `[{"type":"reasoning.text","text":"A","index":0}]`, string(resp.ReasoningDetails))
+}

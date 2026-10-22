@@ -69,6 +69,17 @@ whose arguments fail to parse, does **not** end the run - the model receives the
 error and retries. If the model ends by omission instead, `CompletionArgs` is
 `nil`. A registry with no `Terminal` tool behaves exactly as before.
 
+## Reasoning replay
+
+`Config.ReplayReasoning` (off by default) sends each assistant reply's
+`reasoning_details` back verbatim on later requests, on both dialects, and
+`SubagentOpts.ReplayReasoning` passes the choice to children. Off, seeded
+`History` is stripped of them and the wire is unchanged. The compaction
+summarizer never sees them; the kept tail keeps them. They are opaque and
+signed: consumers never modify or redact them, drop them from `History` when
+the model changes, and leave replay off for a model whose upstream rejects the
+field.
+
 ## Developing
 
 Contributor conventions, verification commands (`make test`, `make test-race`,
