@@ -42,7 +42,8 @@ func replayPin(msgs []llm.Message) string {
 
 // pinProvider merges pin into the routing object raw, because signed
 // reasoning validates only on the provider that produced it. It returns raw
-// and false when raw is not an object or its only/ignore/order rule out the pin.
+// and false when raw is not an object, only or ignore rules out the pin, or
+// only, ignore or order is not a string list.
 func pinProvider(raw json.RawMessage, pin string) (json.RawMessage, bool) {
 	obj := map[string]json.RawMessage{}
 
@@ -56,7 +57,7 @@ func pinProvider(raw json.RawMessage, pin string) (json.RawMessage, bool) {
 
 	if v, ok := obj["only"]; ok {
 		var only []string
-		if json.Unmarshal(v, &only) != nil || !slices.Contains(only, pin) {
+		if json.Unmarshal(v, &only) != nil || (only != nil && !slices.Contains(only, pin)) {
 			return raw, false
 		}
 	}

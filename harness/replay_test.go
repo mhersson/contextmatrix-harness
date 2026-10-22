@@ -148,6 +148,8 @@ func TestPinProvider(t *testing.T) {
 			`{"only":["Anthropic","Claude Platform on AWS"],"order":["Claude Platform on AWS"]}`,
 		},
 		{"ignore that names others", `{"ignore":["Azure"]}`, `{"ignore":["Azure"],"order":["Claude Platform on AWS"]}`},
+		{"only null excludes nothing", `{"only":null}`, `{"only":null,"order":["Claude Platform on AWS"]}`},
+		{"ignore null excludes nothing", `{"ignore":null}`, `{"ignore":null,"order":["Claude Platform on AWS"]}`},
 		{"only that excludes the pin", `{"only":["Anthropic"]}`, ""},
 		{"ignore that names the pin", `{"ignore":["Claude Platform on AWS"]}`, ""},
 		{"names match exactly", `{"only":["claude platform on aws"]}`, ""},
