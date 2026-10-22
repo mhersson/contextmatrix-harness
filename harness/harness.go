@@ -142,7 +142,9 @@ type Config struct {
 	// them (llm.Message.ReasoningProvider), and every turn request puts the
 	// provider of the newest details first in Provider's order and drops
 	// details from any other provider: signed reasoning validates only where
-	// it was produced. Provider's own only and ignore win over the pin.
+	// it was produced. Provider's own only and ignore win over the pin; their
+	// entries are compared verbatim (case included) with the reported provider
+	// name, so prefer order over only and ignore with replay on.
 	// A 400 on a request that carried a pin or details is retried once without
 	// either; a model whose upstream rejects the field then costs one rejected
 	// request per turn, so leave replay off for it.
