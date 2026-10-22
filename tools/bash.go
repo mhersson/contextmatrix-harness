@@ -116,13 +116,13 @@ func (t BashTool) Execute(ctx context.Context, args map[string]any) (Result, err
 	case <-timer.C:
 		_ = syscall.Kill(-pgid, syscall.SIGKILL) //nolint:errcheck
 
-		<-done
+		<-done //nolint:errcheck
 
 		return Result{Text: cw.String() + fmt.Sprintf("\n[command timed out after %ds]", timeout)}, nil
 	case <-ctx.Done():
 		_ = syscall.Kill(-pgid, syscall.SIGKILL) //nolint:errcheck
 
-		<-done
+		<-done //nolint:errcheck
 
 		return Result{Text: cw.String()}, ctx.Err()
 	case werr := <-done:
