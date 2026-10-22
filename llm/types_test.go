@@ -191,6 +191,10 @@ func TestUsageReasoningTokens(t *testing.T) {
 		{"reported", `{"completion_tokens":10,"completion_tokens_details":{"reasoning_tokens":7}}`, 7},
 		{"absent", `{"completion_tokens":10}`, 0},
 		{"null details", `{"completion_tokens":10,"completion_tokens_details":null}`, 0},
+		{"integral float", `{"completion_tokens":10,"completion_tokens_details":{"reasoning_tokens":1.0}}`, 1},
+		{"string value", `{"completion_tokens":10,"completion_tokens_details":{"reasoning_tokens":"3"}}`, 0},
+		{"array details", `{"completion_tokens":10,"completion_tokens_details":[]}`, 0},
+		{"object without key", `{"completion_tokens":10,"completion_tokens_details":{}}`, 0},
 	}
 
 	for _, tt := range tests {

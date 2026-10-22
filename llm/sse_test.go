@@ -32,6 +32,19 @@ func TestParseStreamContentAndUsage(t *testing.T) {
 	assert.InEpsilon(t, 0.0003, resp.Usage.Cost, 1e-9)
 }
 
+func TestParseStreamMalformedCompletionTokensDetailsKeepsContent(t *testing.T) {
+	sse := sseFrames(
+		`{"choices":[{"delta":{"content":"Hi"}}]}`,
+		`{"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":7,"completion_tokens":2,"completion_tokens_details":[]}}`,
+	)
+
+	resp, err := parseStream(strings.NewReader(sse), nil)
+	require.NoError(t, err)
+	assert.Equal(t, "Hi", resp.Content)
+	assert.Equal(t, 2, resp.Usage.CompletionTokens)
+	assert.Equal(t, 0, resp.Usage.ReasoningTokens())
+}
+
 func TestParseStreamToolCallByIndexWithLateName(t *testing.T) {
 	// Name arrives in a LATER delta than id/arguments; args split across frames.
 	sse := strings.Join([]string{

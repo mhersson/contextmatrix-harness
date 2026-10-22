@@ -149,10 +149,12 @@ func parseStreamWithLimit(r io.Reader, onDelta func(Delta), maxLine int) (Respon
 				}
 			}
 
-			var frags []json.RawMessage
-			if json.Unmarshal(d.ReasoningDetails, &frags) == nil {
-				for _, f := range frags {
-					details.add(f)
+			if len(d.ReasoningDetails) > 0 {
+				var frags []json.RawMessage
+				if json.Unmarshal(d.ReasoningDetails, &frags) == nil {
+					for _, f := range frags {
+						details.add(f)
+					}
 				}
 			}
 

@@ -6,6 +6,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"math"
 )
 
 // Message is one chat message (OpenAI-compatible).
@@ -138,6 +139,26 @@ type PromptTokensDetails struct {
 // CompletionTokensDetails carries the OpenAI-shape completion detail.
 type CompletionTokensDetails struct {
 	ReasoningTokens int `json:"reasoning_tokens"`
+}
+
+// UnmarshalJSON never fails: this field is unused best-effort telemetry, so a
+// malformed value must not fail the call. Anything but an integral number yields 0.
+func (c *CompletionTokensDetails) UnmarshalJSON(data []byte) error {
+	*c = CompletionTokensDetails{}
+
+	var raw struct {
+		ReasoningTokens json.RawMessage `json:"reasoning_tokens"`
+	}
+	if json.Unmarshal(data, &raw) != nil {
+		return nil
+	}
+
+	var f float64
+	if json.Unmarshal(raw.ReasoningTokens, &f) == nil && f == math.Trunc(f) && f >= 0 && f < 1<<31 {
+		c.ReasoningTokens = int(f)
+	}
+
+	return nil
 }
 
 type Usage struct {

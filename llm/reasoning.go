@@ -77,7 +77,10 @@ func (e *detailEntry) merge(fields map[string]json.RawMessage) {
 
 // detailsAccumulator merges streamed reasoning_details fragments per index.
 // The provider-side signature check covers the assembled entries, so unknown
-// keys are carried through untouched.
+// keys are carried through untouched. Fragments sharing an index merge
+// regardless of type, and type takes the latest value: live Gemini streams
+// send a reasoning.text and a reasoning.encrypted fragment on one index, and
+// the provider accepted the folded entry on replay.
 type detailsAccumulator struct {
 	entries []*detailEntry
 	byIndex map[int]int
@@ -204,7 +207,9 @@ func encodeString(s string) json.RawMessage {
 	return b
 }
 
-// marshalNoEscape keeps "<", ">" and "&" literal so opaque payloads are not rewritten.
+// marshalNoEscape keeps "<", ">" and "&" literal in the assembled
+// Response.ReasoningDetails bytes; the request encoder may escape them again
+// with value-equal JSON.
 func marshalNoEscape(v any) (json.RawMessage, error) {
 	var buf bytes.Buffer
 
