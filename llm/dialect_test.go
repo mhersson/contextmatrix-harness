@@ -144,6 +144,30 @@ func TestEncodeRequestWireUnchangedWithoutReasoningDetails(t *testing.T) {
 		b, err := encodeRequest(replayHistory(), d)
 		require.NoError(t, err)
 		assert.Equal(t, w, string(b), "dialect %v", d)
+
+		// A recorded provider is persistence-only: it never changes the bytes.
+		tagged := replayHistory()
+		for i := range tagged.Messages {
+			tagged.Messages[i].ReasoningProvider = "Anthropic"
+		}
+
+		b, err = encodeRequest(tagged, d)
+		require.NoError(t, err)
+		assert.Equal(t, w, string(b), "dialect %v with a recorded provider", d)
+	}
+}
+
+func TestEncodeRequestNeverSendsReasoningProvider(t *testing.T) {
+	for _, d := range []Dialect{DialectOpenRouter, DialectOpenAI} {
+		req := replayHistory()
+		req.Messages[2].ReasoningDetails = json.RawMessage(testDetails)
+		req.Messages[2].ReasoningProvider = "Anthropic"
+
+		b, err := encodeRequest(req, d)
+		require.NoError(t, err)
+		assert.NotContains(t, string(b), "reasoning_provider", "dialect %v", d)
+		assert.Contains(t, string(b), `"reasoning_details"`, "dialect %v", d)
+		assert.Equal(t, "Anthropic", req.Messages[2].ReasoningProvider, "the caller's messages are never modified")
 	}
 }
 

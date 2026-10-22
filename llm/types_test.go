@@ -205,3 +205,26 @@ func TestUsageReasoningTokens(t *testing.T) {
 		})
 	}
 }
+
+func TestMessageJSONRoundTripKeepsReasoningProvider(t *testing.T) {
+	in := Message{
+		Role: "assistant", Content: "a",
+		ReasoningDetails: json.RawMessage(testDetails), ReasoningProvider: "Claude Platform on AWS",
+	}
+
+	b, err := json.Marshal(in)
+	require.NoError(t, err)
+
+	var out Message
+	require.NoError(t, json.Unmarshal(b, &out))
+	assert.Equal(t, "Claude Platform on AWS", out.ReasoningProvider)
+	assert.JSONEq(t, testDetails, string(out.ReasoningDetails))
+}
+
+func TestMessageHasReasoningDetails(t *testing.T) {
+	for raw, want := range map[string]bool{
+		"": false, "null": false, "[]": false, `{"type":"reasoning.text"}`: false, testDetails: true,
+	} {
+		assert.Equal(t, want, Message{ReasoningDetails: json.RawMessage(raw)}.HasReasoningDetails(), "raw %q", raw)
+	}
+}
