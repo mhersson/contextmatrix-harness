@@ -29,11 +29,21 @@ const stallTimeout = 5 * time.Minute
 // errors.As.
 type StatusError struct {
 	StatusCode int    // HTTP status code of the reply
-	Body       string // raw response body, at most 8 MiB
+	Body       string // raw response body; empty when it exceeded 8 MiB
 }
 
 func (e *StatusError) Error() string {
 	return fmt.Sprintf("llm endpoint status %d: %s", e.StatusCode, e.Body)
+}
+
+// errOversizeBody reports a reply body past maxResponseBody. A non-200 status
+// stays reachable as *StatusError so callers still classify the reply.
+func errOversizeBody(status int) error {
+	if status != http.StatusOK {
+		return fmt.Errorf("response body exceeds %d bytes: %w", maxResponseBody, &StatusError{StatusCode: status})
+	}
+
+	return fmt.Errorf("response body exceeds %d bytes", maxResponseBody)
 }
 
 type Client struct {
@@ -107,7 +117,7 @@ func (c *Client) SendStream(ctx context.Context, req Request, onDelta func(Delta
 			_ = hr.Body.Close() //nolint:errcheck
 
 			if len(body) > maxResponseBody {
-				return Response{}, fmt.Errorf("response body exceeds %d bytes", maxResponseBody)
+				return Response{}, errOversizeBody(hr.StatusCode)
 			}
 
 			return Response{}, &StatusError{StatusCode: hr.StatusCode, Body: string(body)}
@@ -178,7 +188,7 @@ func (c *Client) Send(ctx context.Context, req Request) (Response, error) {
 		}
 
 		if len(body) > maxResponseBody {
-			return Response{}, fmt.Errorf("response body exceeds %d bytes", maxResponseBody)
+			return Response{}, errOversizeBody(hr.StatusCode)
 		}
 
 		if hr.StatusCode != http.StatusOK {

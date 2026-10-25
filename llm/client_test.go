@@ -140,21 +140,36 @@ func TestClientNon200(t *testing.T) {
 	}
 }
 
-// TestSendStreamCapsOversizeErrorBody verifies that SendStream returns a "too
-// large" error when a non-200 error response body exceeds maxResponseBody.
-func TestSendStreamCapsOversizeErrorBody(t *testing.T) {
+// TestOversizeErrorBodyKeepsTheStatus verifies that a non-200 reply whose body
+// exceeds maxResponseBody is still a *StatusError carrying the code, with the
+// body dropped rather than truncated.
+func TestOversizeErrorBodyKeepsTheStatus(t *testing.T) {
 	oversized := make([]byte, maxResponseBody+1)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusTooManyRequests)
+		w.WriteHeader(http.StatusBadRequest)
 		w.Write(oversized) //nolint:errcheck
 	}))
 	defer srv.Close()
 
 	c := NewClient("k", WithBaseURL(srv.URL))
-	_, err := c.SendStream(context.Background(), Request{Messages: []Message{{Role: "user"}}}, nil)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "exceeds")
+	req := Request{Messages: []Message{{Role: "user"}}}
+
+	for _, stream := range []bool{true, false} {
+		t.Run(fmt.Sprintf("stream=%t", stream), func(t *testing.T) {
+			var err error
+			if stream {
+				_, err = c.SendStream(context.Background(), req, nil)
+			} else {
+				_, err = c.Send(context.Background(), req)
+			}
+
+			var se *StatusError
+			require.ErrorAs(t, err, &se)
+			assert.Equal(t, http.StatusBadRequest, se.StatusCode)
+			assert.Empty(t, se.Body)
+		})
+	}
 }
 
 // TestSendCapsOversizeBody verifies that Send returns a "too large" error when a
@@ -174,6 +189,9 @@ func TestSendCapsOversizeBody(t *testing.T) {
 		_, err := c.Send(context.Background(), Request{Messages: []Message{{Role: "user"}}})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "exceeds")
+
+		var se *StatusError
+		assert.NotErrorAs(t, err, &se, "an oversize 200 is not a status error")
 	})
 
 	t.Run("normal small body still works", func(t *testing.T) {
