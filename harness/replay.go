@@ -4,8 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"net/http"
 	"slices"
-	"strings"
 
 	"github.com/mhersson/contextmatrix-harness/events"
 	"github.com/mhersson/contextmatrix-harness/llm"
@@ -135,9 +136,11 @@ func replayRequest(req llm.Request) (llm.Request, string) {
 	return req, pin
 }
 
-// isBadRequest reports whether err is the client's HTTP 400 status error.
+// isBadRequest reports whether err carries the client's HTTP 400 status error.
 func isBadRequest(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "llm endpoint status 400")
+	var se *llm.StatusError
+
+	return errors.As(err, &se) && se.StatusCode == http.StatusBadRequest
 }
 
 // carriesReasoning reports whether any message in msgs holds reasoning details.
@@ -148,8 +151,8 @@ func carriesReasoning(msgs []llm.Message) bool {
 // failedRoutingStep extracts the gateway's error.metadata.failed_routing_step
 // from a 400 error, or "" when absent or undecodable.
 func failedRoutingStep(err error) string {
-	_, body, ok := strings.Cut(err.Error(), "llm endpoint status 400: ")
-	if !ok {
+	var se *llm.StatusError
+	if !errors.As(err, &se) || se.StatusCode != http.StatusBadRequest {
 		return ""
 	}
 
@@ -160,7 +163,7 @@ func failedRoutingStep(err error) string {
 			} `json:"metadata"`
 		} `json:"error"`
 	}
-	if json.Unmarshal([]byte(body), &env) != nil {
+	if json.Unmarshal([]byte(se.Body), &env) != nil {
 		return ""
 	}
 

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"testing"
 
 	"github.com/mhersson/contextmatrix-harness/events"
@@ -144,7 +145,7 @@ func TestGraceTurnToolChoiceFallbackOn400(t *testing.T) {
 	reg := tools.NewRegistry(tools.NewReadTool(t.TempDir()), fin)
 
 	w := &burnLLM{
-		errs: []error{nil, nil, nil, errors.New("llm endpoint status 400: bad tool_choice")},
+		errs: []error{nil, nil, nil, statusErr(http.StatusBadRequest, "bad tool_choice")},
 		responses: []llm.Response{
 			{ToolCalls: []llm.ToolCall{toolCall("1", "read", `{"path":"missing1"}`)}},
 			{ToolCalls: []llm.ToolCall{toolCall("2", "read", `{"path":"missing2"}`)}},
@@ -169,7 +170,7 @@ func TestGraceTurnDeclinesWithoutRetryOnNon400Error(t *testing.T) {
 	reg := tools.NewRegistry(tools.NewReadTool(t.TempDir()), fin)
 
 	w := &burnLLM{
-		errs: []error{nil, nil, nil, errors.New("llm endpoint status 500: internal error")},
+		errs: []error{nil, nil, nil, statusErr(http.StatusInternalServerError, "internal error")},
 	}
 
 	res, err := Run(context.Background(), w, reg, newEmitter(), "task", Config{MaxTurns: 3, GraceTurn: true})
@@ -188,7 +189,7 @@ func TestGraceTurnFallbackRetryDeclinedStaysMaxTurns(t *testing.T) {
 	reg := tools.NewRegistry(tools.NewReadTool(t.TempDir()), fin)
 
 	w := &burnLLM{
-		errs: []error{nil, nil, nil, errors.New("llm endpoint status 400: bad tool_choice")},
+		errs: []error{nil, nil, nil, statusErr(http.StatusBadRequest, "bad tool_choice")},
 		responses: []llm.Response{
 			{ToolCalls: []llm.ToolCall{toolCall("1", "read", `{"path":"missing1"}`)}},
 			{ToolCalls: []llm.ToolCall{toolCall("2", "read", `{"path":"missing2"}`)}},
@@ -517,7 +518,7 @@ func TestGraceTurnBadRequestDropsReplayBeforeToolChoice(t *testing.T) {
 		}
 	}
 	w := &burnLLM{
-		errs: []error{nil, nil, nil, errors.New("llm endpoint status 400: rejected")},
+		errs: []error{nil, nil, nil, statusErr(http.StatusBadRequest, "rejected")},
 		responses: []llm.Response{
 			turn("1"), turn("2"), turn("3"),
 			{ToolCalls: []llm.ToolCall{toolCall("4", "finish", `{}`)}},
@@ -548,7 +549,7 @@ func TestGraceTurnToolChoiceRetryFollowsFailedReplayRetry(t *testing.T) {
 			Provider:         "Anthropic",
 		}
 	}
-	bad := errors.New("llm endpoint status 400: rejected")
+	bad := statusErr(http.StatusBadRequest, "rejected")
 	w := &burnLLM{
 		errs: []error{nil, nil, nil, bad, bad, nil},
 		responses: []llm.Response{

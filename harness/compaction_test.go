@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -440,6 +441,18 @@ func TestRunCompactionFailedErrorIsRedactedAndCapped(t *testing.T) {
 	assert.NotContains(t, failed[0], secretHead[:survive], "head-cut fragment leaked: the cap ran before redaction")
 	assert.NotContains(t, failed[0], secretTail[len(secretTail)-survive:], "tail-cut fragment leaked: the cap ran before redaction")
 	assert.LessOrEqual(t, len(failed[0]), maxBytes+80, "the error is bounded by the cap") // marker allowance
+}
+
+func TestCompactKeepsTheStatusErrorReachable(t *testing.T) {
+	msgs := append([]llm.Message{{Role: "system", Content: "SYS"}}, history20()...)
+	f := &scriptedLLMWithErrors{results: []scriptedCall{{err: &llm.StatusError{StatusCode: http.StatusServiceUnavailable, Body: "busy"}}}}
+
+	_, _, err := compact(context.Background(), f, Config{Model: "m"}, msgs, 2, newEmitter())
+
+	var se *llm.StatusError
+	require.ErrorAs(t, err, &se, "the summarize wrap keeps the status error reachable")
+	assert.Equal(t, http.StatusServiceUnavailable, se.StatusCode)
+	assert.Equal(t, "busy", se.Body)
 }
 
 // TestCompact_ForwardsModelsAndProvider verifies that the summarize request
