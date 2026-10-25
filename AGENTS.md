@@ -9,7 +9,8 @@ entry points.
 
 This module owns the loop and nothing about *what* the session is for.
 Orchestration, protocol, transport, and policy belong in the consuming backends
-(`contextmatrix-agent`, `contextmatrix-chat`), never here.
+(`contextmatrix-agent`, `contextmatrix-chat`, `contextmatrix-architect`), never
+here. `contextmatrix-backendkit`, their shared serve plumbing, imports `redact`.
 
 - `harness` imports **only** `events`, `llm`, `tools` (+ stdlib + itself).
 - The module has **zero external module dependencies** in non-test code
@@ -28,7 +29,8 @@ Orchestration, protocol, transport, and policy belong in the consuming backends
 - `context.Context` is the first parameter of every function that does I/O.
 - No global state, no `init()`. Dependencies are struct fields wired by the caller.
 - Interfaces live in the package that *uses* them; constructors return concrete
-  types.
+  types. The exceptions are the shared contracts the loop and its callers both
+  implement against: `llm.LLM`, `tools.Terminal`, and `tools.ReadOnly`.
 - Tools are jailed to a workspace root - resolve every path through
   `resolveInRoot`; never touch the filesystem outside it.
 - Tests sit next to code (`bash.go` → `bash_test.go`), table-driven, `t.TempDir()`,
@@ -100,13 +102,14 @@ Fix any failure before proceeding. Never commit red.
 - **Never commit to `main`.** Work on a feature branch; tasks of a plan or
   scope the user approved commit there without asking again. Never push
   without explicit user approval.
+- No session links in commits or PRs.
 
 **NEVER** reference a plan phase or task number in a commit message.
 
 Write **conventional commits** - `type(scope): concise description`, lowercase,
-scoped to a package (`harness`, `tools`, `llm`, `events`, `redact`). Keep the
-subject short; use body bullet points for the *what* and *why*, not long
-paragraphs.
+scoped to a package (`harness`, `tools`, `llm`, `events`, `redact`, `tlsca`).
+Keep the subject short; use body bullet points for the *what* and *why*, not
+long paragraphs.
 
 ```
 feat(harness): add tools.Terminal for explicit Run completion
