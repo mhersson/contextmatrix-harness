@@ -47,19 +47,17 @@ func isEmptyResponse(resp llm.Response) bool {
 
 // contextLimitThreshold is the fraction of the model's context window that, once
 // a reply's prompt reaches it, makes the harness stop with context_limit instead
-// of sending another request. With Config.Compaction set, in-window compaction
-// runs first and this remains the fall-through hard stop. Both apply only when
-// another request follows: a final reply (non-empty, no tool calls, no Inbox)
-// completes without either. Detection uses the provider's authoritative
-// prompt_tokens.
+// of acting on that reply. With Config.Compaction set, in-window compaction runs
+// first and this remains the fall-through hard stop. Neither applies to a final
+// reply (non-empty, no tool calls, no Inbox), which ends the run. Detection uses
+// the provider's authoritative prompt_tokens.
 const contextLimitThreshold = 0.85
 
 // Compaction controls in-window context compaction. When non-nil, the harness
 // summarizes the older conversation prefix once a reply's prompt reaches the
-// effective threshold and another request follows, keeps that reply and
-// carries on with it instead of hard-stopping. A final reply (non-empty, no
-// tool calls, no Inbox) never compacts, so Result.Messages keeps the full
-// history.
+// effective threshold, keeps that reply and carries on with it instead of
+// hard-stopping. A final reply (non-empty, no tool calls, no Inbox) ends the run
+// and never compacts, so Result.Messages keeps the full history.
 type Compaction struct {
 	// Threshold is the fraction of ContextWindow at which compaction fires
 	// (e.g. 0.85 = 85%). The effective threshold is the minimum of this value
@@ -86,7 +84,7 @@ type Config struct {
 	RedactToolOutput   func(string) string // nil = identity; applied before the size cap
 	Inbox              Inbox               // nil = autonomous; non-nil feeds mid-run human input
 	IncapableThreshold int                 // consecutive unproductive turns before "incapable"; 0 → default 3
-	History            []llm.Message       // prior conversation to seed before the initial task message; nil = unchanged behavior
+	History            []llm.Message       // prior conversation to seed before the initial task message; nil = no seeded history
 	Compaction         *Compaction         // nil = hard context_limit stop; non-nil = in-window compaction
 	Interactive        bool                // true = unbounded turns; incapable, transport and empty-reply errors await next input instead of terminating (requires Inbox)
 	// OnDelta receives each streamed content, reasoning or tool-call fragment
@@ -102,8 +100,8 @@ type Config struct {
 	// exactly once, at the top of the turn whose start leaves WrapUpTurns turns
 	// remaining before MaxTurns. It arrives as the freshest message in context -
 	// far more effective against end-of-run dithering than a static instruction
-	// from the seed prompt. Ignored in Interactive mode (no turn cap) and when 0
-	// (byte-identical to prior behavior).
+	// from the seed prompt. Ignored in Interactive mode (no turn cap); 0 disables
+	// it.
 	WrapUpTurns int
 	// WrapUpMessage is the synthetic user message WrapUpTurns injects. Empty
 	// uses a built-in default that names the remaining turn count.
@@ -112,11 +110,11 @@ type Config struct {
 	// message exactly once, after that many consecutive turns have each spent a
 	// whole model call on a single call to a tools.ReadOnly tool. Any other turn
 	// shape resets the count. It suggests grouping; it never groups anything
-	// itself, so a model whose next lookup depends on this one can ignore it. Unlike WrapUpTurns this does not depend
-	// on the turn cap, so it applies in Interactive mode too. Zero (byte-identical
-	// to prior behavior) disables it, as does a wrap-up nudge having already
-	// fired: telling a model to batch its reads while it is being told to finish
-	// is contradictory.
+	// itself, so a model whose next lookup depends on this one can ignore it.
+	// Unlike WrapUpTurns this does not depend on the turn cap, so it applies in
+	// Interactive mode too. Zero disables it, as does a wrap-up nudge having
+	// already fired: telling a model to batch its reads while it is being told
+	// to finish is contradictory.
 	BatchNudgeTurns int
 	// BatchNudgeMessage is the synthetic user message BatchNudgeTurns injects.
 	// Empty uses a built-in default that names the count.
@@ -125,12 +123,12 @@ type Config struct {
 	// exhausted (non-Interactive only), offering ONLY the registry's Terminal
 	// tools plus a synthetic user message demanding the terminal call. A model
 	// whose work is done but that never spent a turn on the terminal tool can
-	// still land it; any other response stops as max_turns exactly as before.
+	// still land it; any other response stops the run as max_turns.
 	// The grace call's usage is accounted; res.Turns is not incremented.
 	GraceTurn bool
 	// TaskImages, when non-empty, are attached to the initial user message as
-	// OpenAI image_url content parts (after the task text). nil = text-only,
-	// byte-identical to prior behavior.
+	// OpenAI image_url content parts (after the task text). nil = a text-only
+	// task message.
 	TaskImages []llm.ImageURL
 	// ReplayReasoning, when true, sends each assistant reply's
 	// reasoning_details back verbatim on that message in every later request,
@@ -183,11 +181,11 @@ type Result struct {
 	IncapableDetail string
 	Output          string          // final assistant text of the last turn
 	CompletionArgs  json.RawMessage // terminating-tool call arguments; nil if the run ended by omission
-	// Messages is the full in-memory conversation at stop time: system
-	// prompt, seeded History, the task message, and every turn's assistant
-	// and tool messages. Callers that run a model in rounds (mob seats)
-	// feed it back as Config.History to continue with full tool-call
-	// fidelity instead of a text-only transcript.
+	// Messages is the in-memory conversation at stop time: system prompt,
+	// seeded History, the task message, and every turn's assistant and tool
+	// messages, with a compacted prefix replaced by its summary. Callers that
+	// run a model in rounds feed it back as Config.History to continue with
+	// full tool-call fidelity instead of a text-only transcript.
 	Messages []llm.Message
 }
 
@@ -333,8 +331,6 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 		return true, err
 	}
 
-	// MaxTurns>0 per-exchange backstop in interactive mode is deferred;
-	// chat uses MaxTurns=0 (unbounded). Non-interactive behavior is byte-identical.
 	for cfg.Interactive || res.Turns < cfg.MaxTurns {
 		if costCapExceeded(cfg, res) {
 			res.Reason = "max_cost"
@@ -834,7 +830,7 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 		// first, with no user message interleaved). Image context precedes any
 		// human interjection.
 		if len(turnImages) > 0 {
-			// No image count or size cap here; CM's server-side limit (max 10 images, ~20 MiB) is the gate.
+			// No image count or size cap here; a caller that needs one enforces it.
 			msgs = append(msgs, imageMessage(turnImages))
 			emit.Emit(events.StateChange, map[string]any{"event": "tool_images", "count": len(turnImages)})
 		}

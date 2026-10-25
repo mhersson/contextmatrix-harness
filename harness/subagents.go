@@ -17,7 +17,7 @@ type SubagentSpec struct {
 	Model         string // optional per-spec override; falls back to opts.DefaultModel
 	MaxTurns      int    // 0 -> harness default
 	ContextWindow int    // child model's context window; 0 disables the check
-	WrapUpTurns   int    // 0 -> no wrap-up nudge (previous behavior)
+	WrapUpTurns   int    // 0 -> no wrap-up nudge
 	WrapUpMessage string // injected when WrapUpTurns remain
 }
 
