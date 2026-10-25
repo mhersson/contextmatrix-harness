@@ -11,6 +11,7 @@ import (
 
 	"github.com/mhersson/contextmatrix-harness/events"
 	"github.com/mhersson/contextmatrix-harness/llm"
+	"github.com/mhersson/contextmatrix-harness/redact"
 	"github.com/mhersson/contextmatrix-harness/tools"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -300,6 +301,43 @@ func TestRunHardStopLetsAFinalReplyComplete(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRunCompactionFailedErrorIsRedactedAndCapped(t *testing.T) {
+	const (
+		maxBytes = 200
+		secret   = "sk-or-v1-compaction-secret-A1"
+	)
+
+	f := &scriptedLLMWithErrors{results: []scriptedCall{
+		{resp: llm.Response{Content: "ANSWER", FinishReason: "stop", Usage: llm.Usage{PromptTokens: 900}}},
+		// The secret sits inside the head the cap keeps, so only redaction removes it.
+		{err: fmt.Errorf("llm endpoint status 502: %s%s", secret, strings.Repeat("X", 5000))},
+	}}
+
+	cfg := compactingConfig(2)
+	cfg.RedactToolOutput = redact.New([]string{secret}).Apply
+	cfg.ToolOutputMaxBytes = maxBytes
+
+	var transcript bytes.Buffer
+
+	_, err := Run(context.Background(), f, tools.NewRegistry(), events.NewEmitter(nil, &transcript), "go", cfg)
+	require.NoError(t, err)
+
+	var failed []string
+
+	for _, ev := range parseEvents(t, transcript.String()) {
+		if ev.Kind == events.StateChange && ev.Data["event"] == "compaction_failed" {
+			msg, ok := ev.Data["error"].(string)
+			require.True(t, ok, "compaction_failed must carry a string error")
+
+			failed = append(failed, msg)
+		}
+	}
+
+	require.Len(t, failed, 1)
+	assert.NotContains(t, transcript.String(), secret)
+	assert.LessOrEqual(t, len(failed[0]), maxBytes+80, "the error is bounded by the cap") // marker allowance
 }
 
 // TestCompact_ForwardsModelsAndProvider verifies that the summarize request

@@ -1924,8 +1924,8 @@ func TestMultiImageAggregation(t *testing.T) {
 	assert.Equal(t, "data:image/png;base64,IMG2", img.ContentParts[2].ImageURL.URL)
 }
 
-// TestTransportErrorEmitIsRedactedAndCapped covers the last content-bearing
-// emit site: a SendStream error embeds the provider response body (up to
+// TestTransportErrorEmitIsRedactedAndCapped covers the transport-error emit
+// site: a SendStream error embeds the provider response body (up to
 // 8 MiB), so the error event must pass through cfg.RedactToolOutput and the
 // ToolOutputMaxBytes cap like every other emit - and in the correct order
 // (redact, then truncate), never the reverse.

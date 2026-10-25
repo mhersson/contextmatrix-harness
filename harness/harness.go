@@ -480,10 +480,12 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 						})
 					default:
 						// Compaction failed (e.g. nothing left to summarize): emit a
-						// warning and fall through to the hard-stop check below.
+						// warning and fall through to the hard-stop check below. A summarize
+						// transport error embeds the provider response body, so it is
+						// redacted and capped as in failTurn.
 						emit.Emit(events.StateChange, map[string]any{
 							"event": "compaction_failed",
-							"error": cerr.Error(),
+							"error": tools.HeadTail(redactStr(cfg, cerr.Error()), cfg.ToolOutputMaxBytes),
 						})
 					}
 				}
