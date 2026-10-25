@@ -23,6 +23,17 @@ const maxResponseBody = 8 << 20
 // SendStream can catch it.
 const stallTimeout = 5 * time.Minute
 
+// StatusError is an endpoint reply whose HTTP status is not 200 OK. Consumers
+// match its Error text, "llm endpoint status <code>: <body>", so it stays fixed.
+type StatusError struct {
+	StatusCode int    // HTTP status code of the reply
+	Body       string // raw response body, at most 8 MiB
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("llm endpoint status %d: %s", e.StatusCode, e.Body)
+}
+
 type Client struct {
 	http    *http.Client
 	baseURL string
@@ -97,7 +108,7 @@ func (c *Client) SendStream(ctx context.Context, req Request, onDelta func(Delta
 				return Response{}, fmt.Errorf("response body exceeds %d bytes", maxResponseBody)
 			}
 
-			return Response{}, fmt.Errorf("llm endpoint status %d: %s", hr.StatusCode, string(body))
+			return Response{}, &StatusError{StatusCode: hr.StatusCode, Body: string(body)}
 		}
 
 		body := newStallReader(hr.Body, stallTimeout)
@@ -169,7 +180,7 @@ func (c *Client) Send(ctx context.Context, req Request) (Response, error) {
 		}
 
 		if hr.StatusCode != http.StatusOK {
-			return Response{}, fmt.Errorf("llm endpoint status %d: %s", hr.StatusCode, string(body))
+			return Response{}, &StatusError{StatusCode: hr.StatusCode, Body: string(body)}
 		}
 
 		var nr nonStreamResponse

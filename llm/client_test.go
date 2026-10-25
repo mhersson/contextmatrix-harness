@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -109,17 +110,34 @@ func TestClientSendStreamOpenAIDialect(t *testing.T) {
 }
 
 func TestClientNon200(t *testing.T) {
+	const body = "rate limited"
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTooManyRequests)
-		io.WriteString(w, `{"error":{"message":"rate limited"}}`) //nolint:errcheck
+		io.WriteString(w, body) //nolint:errcheck
 	}))
 	defer srv.Close()
 
 	c := NewClient("k", WithBaseURL(srv.URL))
-	_, err := c.SendStream(context.Background(), Request{Messages: []Message{{Role: "user"}}}, nil)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "429")
-	assert.Contains(t, err.Error(), "rate limited")
+	req := Request{Messages: []Message{{Role: "user"}}}
+
+	for _, stream := range []bool{true, false} {
+		t.Run(fmt.Sprintf("stream=%t", stream), func(t *testing.T) {
+			var err error
+			if stream {
+				_, err = c.SendStream(context.Background(), req, nil)
+			} else {
+				_, err = c.Send(context.Background(), req)
+			}
+
+			var se *StatusError
+			require.ErrorAs(t, err, &se)
+			assert.Equal(t, http.StatusTooManyRequests, se.StatusCode)
+			assert.Equal(t, body, se.Body)
+			// Consumers match this text, so it is a wire contract.
+			assert.Equal(t, "llm endpoint status 429: "+body, err.Error())
+		})
+	}
 }
 
 // TestSendStreamCapsOversizeErrorBody verifies that SendStream returns a "too
