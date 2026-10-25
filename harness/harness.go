@@ -47,16 +47,19 @@ func isEmptyResponse(resp llm.Response) bool {
 
 // contextLimitThreshold is the fraction of the model's context window that, once
 // a reply's prompt reaches it, makes the harness stop with context_limit instead
-// of sending another request. A final reply (non-empty, no tool calls, no Inbox)
-// still completes, since no request follows it. With Config.Compaction set,
-// in-window compaction runs first and this remains the fall-through hard stop.
-// Detection uses the provider's authoritative prompt_tokens.
+// of sending another request. With Config.Compaction set, in-window compaction
+// runs first and this remains the fall-through hard stop. Both apply only when
+// another request follows: a final reply (non-empty, no tool calls, no Inbox)
+// completes without either. Detection uses the provider's authoritative
+// prompt_tokens.
 const contextLimitThreshold = 0.85
 
 // Compaction controls in-window context compaction. When non-nil, the harness
 // summarizes the older conversation prefix once a reply's prompt reaches the
-// effective threshold, keeps that reply and carries on with it instead of
-// hard-stopping.
+// effective threshold and another request follows, keeps that reply and
+// carries on with it instead of hard-stopping. A final reply (non-empty, no
+// tool calls, no Inbox) never compacts, so Result.Messages keeps the full
+// history.
 type Compaction struct {
 	// Threshold is the fraction of ContextWindow at which compaction fires
 	// (e.g. 0.85 = 85%). The effective threshold is the minimum of this value
@@ -432,11 +435,15 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 			"reasoning_tokens": resp.Usage.ReasoningTokens(),
 		}, resp.Provider))
 
+		// A final reply ends the run, so it neither compacts nor stops at the hard
+		// limit: no request follows it, and callers read the history it leaves.
+		final := !isEmptyResponse(resp) && len(resp.ToolCalls) == 0 && cfg.Inbox == nil
+
 		// compacted marks a reply whose history compaction replaced: the reply is
 		// kept, and the hard stop is skipped because the history it measured is gone.
 		compacted := false
 
-		if cfg.ContextWindow > 0 {
+		if cfg.ContextWindow > 0 && !final {
 			if cfg.Compaction != nil {
 				if resp.Usage.PromptTokens >= effectiveCompactionThreshold(cfg.ContextWindow, cfg.Compaction.Threshold) {
 					newMsgs, cResp, cerr := compact(ctx, client, cfg, msgs, cfg.Compaction.KeepRecentTurns, emit)
@@ -498,10 +505,7 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 				}
 			}
 
-			// A final reply ends the run, so no further request can overflow the window.
-			final := !isEmptyResponse(resp) && len(resp.ToolCalls) == 0 && cfg.Inbox == nil
-
-			if !compacted && !final && resp.Usage.PromptTokens >= hardStop {
+			if !compacted && resp.Usage.PromptTokens >= hardStop {
 				res.Reason = "context_limit"
 
 				emit.Emit(events.ContextLimit, map[string]any{

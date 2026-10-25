@@ -208,20 +208,9 @@ func TestRunContextLimitDisabledWhenWindowZero(t *testing.T) {
 }
 
 func TestRun_CompactionNoProgressFallsThrough(t *testing.T) {
-	// A single assistant+3-tool group as history: snapping pulls the whole group
-	// into the kept tail, older collapses to [user "old"], and out == in (no shrink).
-	tcs := []llm.ToolCall{
-		{ID: "c1", Type: "function", Function: llm.FunctionCall{Name: "foo", Arguments: "{}"}},
-		{ID: "c2", Type: "function", Function: llm.FunctionCall{Name: "foo", Arguments: "{}"}},
-		{ID: "c3", Type: "function", Function: llm.FunctionCall{Name: "foo", Arguments: "{}"}},
-	}
-	history := []llm.Message{
-		{Role: "user", Content: "old"},
-		{Role: "assistant", ToolCalls: tcs},
-		{Role: "tool", ToolCallID: "c1", Content: "r1"},
-		{Role: "tool", ToolCallID: "c2", Content: "r2"},
-		{Role: "tool", ToolCallID: "c3", Content: "r3"},
-	}
+	// Snapping pulls the history's whole tool group into the kept tail, older
+	// collapses to [user "old"], and out == in (no shrink).
+	history := noProgressHistory()
 	fake := &capturingLLMSeq{responses: []llm.Response{
 		crossingToolTurn(),   // >850 → triggers compaction; a final reply would complete instead
 		{Content: "SUMMARY"}, // compact Send
@@ -264,11 +253,15 @@ func TestRun_CompactionCostIsCounted(t *testing.T) {
 		}
 	}
 
+	turn1 := crossingToolTurn() // triggers compaction
+	turn1.Usage.Cost = 0.01
+
 	fake := &capturingLLMSeq{responses: []llm.Response{
-		{Content: "turn1", Usage: llm.Usage{PromptTokens: 900, Cost: 0.01}},                         // triggers compaction
+		turn1,
 		{Content: "SUMMARY", Usage: llm.Usage{PromptTokens: 500, CompletionTokens: 20, Cost: 0.10}}, // compact Send
+		{Content: "done", FinishReason: "stop", Usage: llm.Usage{Cost: 0.02}},
 	}}
-	res, err := Run(context.Background(), fake, tools.NewRegistry(), newEmitter(), "go", Config{
+	res, err := Run(context.Background(), fake, tools.NewRegistry(&countingTool{name: "probe"}), newEmitter(), "go", Config{
 		MaxTurns:      10,
 		SystemPrompt:  "SYS",
 		ContextWindow: 1000,
@@ -276,7 +269,7 @@ func TestRun_CompactionCostIsCounted(t *testing.T) {
 		History:       history,
 	})
 	require.NoError(t, err)
-	assert.InEpsilon(t, 0.11, res.TotalCostUSD, 1e-9) // 0.01 + 0.10
+	assert.InEpsilon(t, 0.13, res.TotalCostUSD, 1e-9) // 0.01 + 0.10 + 0.02
 	assert.EqualValues(t, 1400, res.PromptTokens)     // 900 + 500
 	assert.EqualValues(t, 20, res.CompletionTokens)
 }
@@ -291,8 +284,11 @@ func TestRun_CompactionCacheBucketsAccumulate(t *testing.T) {
 		}
 	}
 
+	turn1 := crossingToolTurn() // triggers compaction
+	turn1.Usage.Cost = 0.01
+
 	fake := &capturingLLMSeq{responses: []llm.Response{
-		{Content: "turn1", Usage: llm.Usage{PromptTokens: 900, Cost: 0.01}}, // triggers compaction
+		turn1,
 		{
 			Content: "SUMMARY",
 			Usage: llm.Usage{
@@ -301,8 +297,9 @@ func TestRun_CompactionCacheBucketsAccumulate(t *testing.T) {
 				CacheCreationInputTokens: 15,
 			},
 		}, // compact Send, cache detail present
+		{Content: "done", FinishReason: "stop", Usage: llm.Usage{Cost: 0.02}},
 	}}
-	res, err := Run(context.Background(), fake, tools.NewRegistry(), newEmitter(), "go", Config{
+	res, err := Run(context.Background(), fake, tools.NewRegistry(&countingTool{name: "probe"}), newEmitter(), "go", Config{
 		MaxTurns:      10,
 		SystemPrompt:  "SYS",
 		ContextWindow: 1000,
@@ -2229,7 +2226,7 @@ func TestRunCompactionUsageEventCarriesCacheBuckets(t *testing.T) {
 	}
 
 	fake := &capturingLLMSeq{responses: []llm.Response{
-		{Content: "turn1", Usage: llm.Usage{PromptTokens: 900, Cost: 0.01}}, // triggers compaction
+		crossingToolTurn(), // triggers compaction
 		{
 			Content: "SUMMARY",
 			Usage: llm.Usage{
@@ -2239,13 +2236,14 @@ func TestRunCompactionUsageEventCarriesCacheBuckets(t *testing.T) {
 				CompletionTokensDetails:  &llm.CompletionTokensDetails{ReasoningTokens: 5},
 			},
 		},
+		{Content: "done", FinishReason: "stop"},
 	}}
 
 	var transcript bytes.Buffer
 
 	emit := events.NewEmitter(nil, &transcript)
 
-	_, err := Run(context.Background(), fake, tools.NewRegistry(), emit, "go", Config{
+	_, err := Run(context.Background(), fake, tools.NewRegistry(&countingTool{name: "probe"}), emit, "go", Config{
 		MaxTurns:      10,
 		Model:         "test-model",
 		ContextWindow: 1000,
