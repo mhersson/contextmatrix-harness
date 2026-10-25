@@ -511,6 +511,21 @@ func TestFailedRoutingStepReadsTheBody(t *testing.T) {
 	}
 }
 
+func TestIsBadRequestSeesAnOversizedBadRequest(t *testing.T) {
+	oversized := strings.Repeat("x", 8<<20+1)
+	client, _ := scriptedEndpoint(t,
+		endpointReply{status: http.StatusBadRequest, body: oversized},
+		endpointReply{status: http.StatusBadRequest, body: oversized},
+	)
+	req := llm.Request{Messages: []llm.Message{{Role: "user", Content: "q"}}}
+
+	_, err := client.SendStream(context.Background(), req, nil)
+	assert.True(t, isBadRequest(err), "SendStream")
+
+	_, err = client.Send(context.Background(), req)
+	assert.True(t, isBadRequest(err), "Send")
+}
+
 func TestRunReturnsTheEndpointStatusError(t *testing.T) {
 	const body = "invalid schema"
 
