@@ -18,6 +18,11 @@ const defaultBaseURL = "https://openrouter.ai/api/v1"
 // vector from a misconfigured or hostile OpenAI-compatible endpoint.
 const maxResponseBody = 8 << 20
 
+// stallTimeout bounds silence on the SSE stream: no bytes at all - data or
+// keepalive - within the window closes the body so the stream-phase retry in
+// SendStream can catch it.
+const stallTimeout = 5 * time.Minute
+
 type Client struct {
 	http    *http.Client
 	baseURL string
@@ -25,7 +30,6 @@ type Client struct {
 	dialect Dialect
 	retry   RetryPolicy
 	sleep   func(context.Context, time.Duration) error
-	stall   time.Duration
 }
 
 type Option func(*Client)
@@ -34,13 +38,8 @@ func WithBaseURL(u string) Option          { return func(c *Client) { c.baseURL 
 func WithDialect(d Dialect) Option         { return func(c *Client) { c.dialect = d } }
 func WithHTTPClient(h *http.Client) Option { return func(c *Client) { c.http = h } }
 
-// WithStallTimeout bounds silence on the SSE stream: no bytes at all - data
-// or keepalive - within the window closes the body so the stream-phase retry
-// in SendStream can catch it. 0 disables the check.
-func WithStallTimeout(d time.Duration) Option { return func(c *Client) { c.stall = d } }
-
 func NewClient(apiKey string, opts ...Option) *Client {
-	c := &Client{http: &http.Client{}, baseURL: defaultBaseURL, apiKey: apiKey, sleep: ctxSleep, stall: 5 * time.Minute}
+	c := &Client{http: &http.Client{}, baseURL: defaultBaseURL, apiKey: apiKey, sleep: ctxSleep}
 	for _, o := range opts {
 		o(c)
 	}
@@ -101,10 +100,7 @@ func (c *Client) SendStream(ctx context.Context, req Request, onDelta func(Delta
 			return Response{}, fmt.Errorf("llm endpoint status %d: %s", hr.StatusCode, string(body))
 		}
 
-		body := hr.Body
-		if c.stall > 0 {
-			body = newStallReader(hr.Body, c.stall)
-		}
+		body := newStallReader(hr.Body, stallTimeout)
 
 		if delivered {
 			onDelta(Delta{Reset: true})
