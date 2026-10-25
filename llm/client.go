@@ -25,6 +25,8 @@ const stallTimeout = 5 * time.Minute
 
 // StatusError is an endpoint reply whose HTTP status is not 200 OK. Consumers
 // match its Error text, "llm endpoint status <code>: <body>", so it stays fixed.
+// A wrapper must keep it reachable with %w, because Run's 400 handling uses
+// errors.As.
 type StatusError struct {
 	StatusCode int    // HTTP status code of the reply
 	Body       string // raw response body, at most 8 MiB
