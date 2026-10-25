@@ -48,16 +48,17 @@ func isEmptyResponse(resp llm.Response) bool {
 // contextLimitThreshold is the fraction of the model's context window that, once
 // a reply's prompt reaches it, makes the harness stop with context_limit instead
 // of acting on that reply. With Config.Compaction set, in-window compaction runs
-// first and this remains the fall-through hard stop. Neither applies to a final
-// reply (non-empty, no tool calls, no Inbox), which ends the run. Detection uses
-// the provider's authoritative prompt_tokens.
+// first and the hard stop is the larger of this fraction of the window and the
+// effective compaction threshold. Neither applies to a final reply (non-empty,
+// no tool calls, no Inbox), which ends the run. Detection uses the provider's
+// authoritative prompt_tokens.
 const contextLimitThreshold = 0.85
 
 // Compaction controls in-window context compaction. When non-nil, the harness
 // summarizes the older conversation prefix once a reply's prompt reaches the
 // effective threshold, keeps that reply and carries on with it instead of
 // hard-stopping. A final reply (non-empty, no tool calls, no Inbox) ends the run
-// and never compacts, so Result.Messages keeps the full history.
+// without compacting, so its turn summarizes nothing away from Result.Messages.
 type Compaction struct {
 	// Threshold is the fraction of ContextWindow at which compaction fires
 	// (e.g. 0.85 = 85%). The effective threshold is the minimum of this value
