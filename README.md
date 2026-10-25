@@ -4,13 +4,18 @@ The FSM-free engine that drives one LLM session: an agentic tool-use loop plus
 the model client, tool registry, secret redaction, and event stream it needs -
 and nothing about *what* the session is for.
 
-This module is consumed by both backends in the ContextMatrix ecosystem:
+Three backends in the ContextMatrix ecosystem drive `Run`:
 
 - **[contextmatrix-agent](https://github.com/mhersson/contextmatrix-agent)**
   wraps it with a task FSM (`orchestrator`/`worker`) to execute board cards.
 - **[contextmatrix-chat](https://github.com/mhersson/contextmatrix-chat)**
   wraps it with an interactive driver using the Inbox, compaction, and
   seeded-history surfaces to power chat sessions.
+- **[contextmatrix-architect](https://github.com/mhersson/contextmatrix-architect)**
+  wraps it to drive the stage runs that turn a request into board cards.
+
+**[contextmatrix-backendkit](https://github.com/mhersson/contextmatrix-backendkit)**,
+the backends' shared serve plumbing, imports `redact`.
 
 ## Packages
 
@@ -21,6 +26,7 @@ This module is consumed by both backends in the ContextMatrix ecosystem:
 | `tools`   | jailed filesystem/shell `Tool` registry, read-only subset, Skill tool        |
 | `harness` | the loop: `Run`, `Verify`, `SpawnSubagents`, the `Inbox` seam, `Config`       |
 | `redact`  | literal-secret masking, injected into the loop via `Config.RedactToolOutput`  |
+| `tlsca`   | HTTP clients that trust an extra operator-supplied CA, stdlib only           |
 
 ## Boundary invariant
 
@@ -67,7 +73,8 @@ result saying so, so the message history the run carries out stays well-formed.
 Termination gates on execution: a terminating tool that returns an error, or
 whose arguments fail to parse, does **not** end the run - the model receives the
 error and retries. If the model ends by omission instead, `CompletionArgs` is
-`nil`. A registry with no `Terminal` tool behaves exactly as before.
+`nil`. Without a `Terminal` tool in the registry, only the default ending by
+omission applies.
 
 ## Reasoning replay
 
