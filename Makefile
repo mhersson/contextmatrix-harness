@@ -2,6 +2,8 @@
 
 # Kept in sync with contextmatrix-agent so CI installs the same linter release.
 GOLANGCI_LINT_VERSION ?= v2.14.0
+# CI installs this govulncheck release (bump by hand, like the linter).
+GOVULNCHECK_VERSION ?= v1.9.0
 
 build:
 	go build ./...
