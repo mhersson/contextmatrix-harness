@@ -170,18 +170,21 @@ func TestRunNoProgressCompactionBelowTheHardStopCarriesOn(t *testing.T) {
 			assert.Equal(t, "ANSWER", res.Output)
 			assert.Len(t, fake.requests, tt.wantCalls)
 
-			failed, limits := 0, 0
+			failed, compacted, limits := 0, 0, 0
 
 			for _, ev := range parseEvents(t, transcript.String()) {
 				switch {
 				case ev.Kind == events.StateChange && ev.Data["event"] == "compaction_failed":
 					failed++
+				case ev.Kind == events.StateChange && ev.Data["event"] == "compaction":
+					compacted++
 				case ev.Kind == events.ContextLimit:
 					limits++
 				}
 			}
 
 			assert.Equal(t, 1, failed)
+			assert.Zero(t, compacted, "a no-progress attempt emits no compaction event")
 			assert.Zero(t, limits)
 			assert.Equal(t, "old", res.Messages[1].Content, "a no-progress compaction leaves the history in place")
 		})
@@ -272,6 +275,43 @@ func TestRunCompactionKeepsTheReplyAndAwaitsInput(t *testing.T) {
 			assert.Equal(t, []string{"FIRST ANSWER", "awaiting_human", "user_input", "SECOND ANSWER", "awaiting_human"}, seq)
 		})
 	}
+}
+
+func TestRunCompactionEventOrder(t *testing.T) {
+	fake := &capturingLLMSeq{responses: []llm.Response{
+		crossingToolTurn(),
+		{Content: "SUMMARY"},
+		{Content: "done", FinishReason: "stop"},
+	}}
+
+	var transcript bytes.Buffer
+
+	_, err := Run(context.Background(), fake, tools.NewRegistry(&countingTool{name: "probe"}), events.NewEmitter(nil, &transcript), "go", compactingConfig(2))
+	require.NoError(t, err)
+
+	var seq []string
+
+	for _, ev := range parseEvents(t, transcript.String()) {
+		switch {
+		case ev.Kind == events.ModelResponse, ev.Kind == events.ToolCallKind, ev.Kind == events.ToolResult:
+			seq = append(seq, string(ev.Kind))
+		case ev.Kind == events.UsageKind && ev.Data["phase"] == "compaction":
+			seq = append(seq, "usage:compaction")
+		case ev.Kind == events.UsageKind:
+			seq = append(seq, string(ev.Kind))
+		case ev.Kind == events.StateChange && ev.Data["event"] == "compaction":
+			seq = append(seq, "compaction")
+
+			assert.InDelta(t, 2.0, ev.Data["kept_recent"], 0)
+			// user 0 to user 18; assistant 19 and the task message are kept.
+			assert.InDelta(t, 19.0, ev.Data["summarized"], 0)
+		}
+	}
+
+	assert.Equal(t, []string{
+		"model_response", "usage", "compaction", "usage:compaction", "tool_call", "tool_result",
+		"model_response", "usage",
+	}, seq)
 }
 
 func TestRunCompactionRunsTheKeptToolCalls(t *testing.T) {
@@ -394,25 +434,44 @@ func TestRunHardStopLetsAFinalReplyComplete(t *testing.T) {
 // the kept side that the literal redact pass can no longer match.
 func TestRunCompactionFailedErrorIsRedactedAndCapped(t *testing.T) {
 	const (
-		maxBytes = 1000
-		// compact's wrap around StatusError's Error text for the reply below.
-		errPrefix  = "compaction summarize: llm endpoint status 502: "
+		maxBytes   = 1000
 		secretHead = "sk-head-straddle-compaction-A1"
 		secretTail = "sk-tail-straddle-compaction-B2"
 		// Bytes of each secret left on the kept side of its cut.
 		survive = 8
 	)
 
+	// summarizeError is the error compact returns when the summarize call fails
+	// with err, so the placement below follows compact's real wrap.
+	summarizeError := func(err error) string {
+		msgs := append([]llm.Message{{Role: "system", Content: "SYS"}}, history20()...)
+
+		_, _, _, cerr := compact(context.Background(), &scriptedLLMWithErrors{results: []scriptedCall{{err: err}}}, Config{}, msgs, 2)
+		require.Error(t, cerr)
+
+		return cerr.Error()
+	}
+
 	// Mirrors tools.HeadTail's split.
 	head := maxBytes * 2 / 3
 	tail := maxBytes - head
-	body := strings.Repeat("E", head-len(errPrefix)-survive) + secretHead +
+	prefix := len(summarizeError(&llm.StatusError{StatusCode: http.StatusBadGateway}))
+	body := strings.Repeat("E", head-prefix-survive) + secretHead +
 		strings.Repeat("X", 5000) +
 		secretTail + strings.Repeat("F", tail-survive)
+	summarizeDown := &llm.StatusError{StatusCode: http.StatusBadGateway, Body: body}
+
+	// Precondition: capping alone keeps a fragment of each secret, so the
+	// assertions below can only pass when redaction runs first.
+	capped := tools.HeadTail(summarizeError(summarizeDown), maxBytes)
+	require.Contains(t, capped, secretHead[:survive])
+	require.Contains(t, capped, secretTail[len(secretTail)-survive:])
+	require.NotContains(t, capped, secretHead)
+	require.NotContains(t, capped, secretTail)
 
 	f := &scriptedLLMWithErrors{results: []scriptedCall{
 		{resp: crossingToolTurn()},
-		{err: &llm.StatusError{StatusCode: http.StatusBadGateway, Body: body}},
+		{err: summarizeDown},
 	}}
 
 	cfg := compactingConfig(2)
@@ -447,7 +506,7 @@ func TestCompactKeepsTheStatusErrorReachable(t *testing.T) {
 	msgs := append([]llm.Message{{Role: "system", Content: "SYS"}}, history20()...)
 	f := &scriptedLLMWithErrors{results: []scriptedCall{{err: &llm.StatusError{StatusCode: http.StatusServiceUnavailable, Body: "busy"}}}}
 
-	_, _, err := compact(context.Background(), f, Config{Model: "m"}, msgs, 2, newEmitter())
+	_, _, _, err := compact(context.Background(), f, Config{Model: "m"}, msgs, 2)
 
 	var se *llm.StatusError
 	require.ErrorAs(t, err, &se, "the summarize wrap keeps the status error reachable")
@@ -536,7 +595,7 @@ func TestCompactForwardsImagePrefixThenDropsIt(t *testing.T) {
 
 	capt := &capturingLLM{}
 
-	out, _, err := compact(context.Background(), capt, Config{Model: "m"}, msgs, 1, newEmitter())
+	out, _, _, err := compact(context.Background(), capt, Config{Model: "m"}, msgs, 1)
 	require.NoError(t, err)
 
 	// (a) The summarizer received the image-bearing prefix verbatim (not stripped).
@@ -682,7 +741,7 @@ func TestCompactPreservesToolGroups(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			capt := &capturingLLM{}
 
-			out, _, err := compact(context.Background(), capt, Config{Model: "m"}, tt.msgs, tt.keepRecent, newEmitter())
+			out, _, _, err := compact(context.Background(), capt, Config{Model: "m"}, tt.msgs, tt.keepRecent)
 			require.NoError(t, err)
 
 			assertFirstNonSystemIsUser(t, out)
@@ -714,7 +773,7 @@ func TestCompactKeepsRecentImageVerbatim(t *testing.T) {
 		imgMsg,
 	}
 
-	out, _, err := compact(context.Background(), &capturingLLM{}, Config{Model: "m"}, msgs, 1, newEmitter())
+	out, _, _, err := compact(context.Background(), &capturingLLM{}, Config{Model: "m"}, msgs, 1)
 	require.NoError(t, err)
 
 	assertFirstNonSystemIsUser(t, out)
@@ -772,7 +831,7 @@ func TestCompactTailStartsWithUser(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			capt := &capturingLLM{}
 
-			out, _, err := compact(context.Background(), capt, Config{Model: "m"}, tt.msgs, tt.keepRecent, newEmitter())
+			out, _, _, err := compact(context.Background(), capt, Config{Model: "m"}, tt.msgs, tt.keepRecent)
 			require.NoError(t, err)
 
 			require.Equal(t, "system", out[0].Role, "first output message must be the system prompt")

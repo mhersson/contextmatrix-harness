@@ -443,7 +443,19 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 		if cfg.ContextWindow > 0 && !final {
 			if cfg.Compaction != nil {
 				if resp.Usage.PromptTokens >= effectiveCompactionThreshold(cfg.ContextWindow, cfg.Compaction.Threshold) {
-					newMsgs, cResp, cerr := compact(ctx, client, cfg, msgs, cfg.Compaction.KeepRecentTurns, emit)
+					newMsgs, summarized, cResp, cerr := compact(ctx, client, cfg, msgs, cfg.Compaction.KeepRecentTurns)
+					shrank := cerr == nil && len(newMsgs) < len(msgs)
+
+					// Only a shrink is a compaction; a no-progress attempt reports
+					// compaction_failed alone.
+					if shrank {
+						emit.Emit(events.StateChange, map[string]any{
+							"event":       "compaction",
+							"kept_recent": max(cfg.Compaction.KeepRecentTurns, 0),
+							"summarized":  summarized,
+						})
+					}
+
 					if cerr == nil {
 						// The summarize call is real and billable regardless of whether it
 						// shrank the history, so it is counted against the budget here,
@@ -467,7 +479,7 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 					}
 
 					switch {
-					case cerr == nil && len(newMsgs) < len(msgs):
+					case shrank:
 						// The retained tail ends with the message this reply answered, so
 						// appending the reply keeps the role order and tool groups valid.
 						msgs = newMsgs

@@ -233,15 +233,15 @@ func TestRun_CompactionNoProgressFallsThrough(t *testing.T) {
 	assert.Equal(t, "context_limit", res.Reason)
 	require.Len(t, fake.requests, 2) // turn-1 SendStream + one compact Send; no turn-2
 
-	sawFailed := false
+	var compactionEvents []any
 
 	for _, ev := range parseEvents(t, transcript.String()) {
-		if ev.Kind == events.StateChange && ev.Data["event"] == "compaction_failed" {
-			sawFailed = true
+		if ev.Kind == events.StateChange && (ev.Data["event"] == "compaction" || ev.Data["event"] == "compaction_failed") {
+			compactionEvents = append(compactionEvents, ev.Data["event"])
 		}
 	}
 
-	assert.True(t, sawFailed, "no-progress compaction must emit compaction_failed")
+	assert.Equal(t, []any{"compaction_failed"}, compactionEvents, "a no-progress attempt emits only compaction_failed")
 }
 
 func TestRun_CompactionCostIsCounted(t *testing.T) {
