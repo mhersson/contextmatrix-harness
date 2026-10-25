@@ -1,7 +1,6 @@
 // Package tlsca builds HTTP clients and transports that trust an operator-
-// supplied extra CA in addition to the system trust store. It backs the
-// backends' ca_cert_file support: a TLS-inspecting egress proxy's CA is
-// threaded into the LLM client and MCP wiring so outbound TLS validates.
+// supplied extra CA in addition to the system trust store, so outbound TLS
+// validates behind a TLS-inspecting egress proxy.
 package tlsca
 
 import (
@@ -19,9 +18,8 @@ import (
 // interception usually implies an HTTP(S) proxy too - while overriding only
 // the trust store. An empty path returns a nil transport so callers keep their
 // default RoundTripper. A missing file or a PEM with no usable certificate is
-// an error. It backs both the worker's harness LLM client (via
-// llm.WithHTTPClient) and the cmclient/MCP wiring, so they share the same
-// trust.
+// an error. A caller that builds every outbound client from the same path,
+// the LLM client via llm.WithHTTPClient included, gives them one shared trust.
 func CATransport(path string) (*http.Transport, error) {
 	if path == "" {
 		return nil, nil
