@@ -395,7 +395,7 @@ func TestRunHardStopLetsAFinalReplyComplete(t *testing.T) {
 func TestRunCompactionFailedErrorIsRedactedAndCapped(t *testing.T) {
 	const (
 		maxBytes = 1000
-		// compact wraps the summarize error; must match the two formats below.
+		// compact's wrap around StatusError's Error text for the reply below.
 		errPrefix  = "compaction summarize: llm endpoint status 502: "
 		secretHead = "sk-head-straddle-compaction-A1"
 		secretTail = "sk-tail-straddle-compaction-B2"
@@ -412,7 +412,7 @@ func TestRunCompactionFailedErrorIsRedactedAndCapped(t *testing.T) {
 
 	f := &scriptedLLMWithErrors{results: []scriptedCall{
 		{resp: crossingToolTurn()},
-		{err: fmt.Errorf("llm endpoint status 502: %s", body)},
+		{err: &llm.StatusError{StatusCode: http.StatusBadGateway, Body: body}},
 	}}
 
 	cfg := compactingConfig(2)

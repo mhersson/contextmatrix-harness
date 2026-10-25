@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1938,7 +1939,7 @@ func TestMultiImageAggregation(t *testing.T) {
 func TestTransportErrorEmitIsRedactedAndCapped(t *testing.T) {
 	const (
 		maxBytes  = 1000
-		errPrefix = "llm endpoint status 502: " // must match the fmt.Errorf format below
+		errPrefix = "llm endpoint status 502: " // StatusError's Error text for the reply below
 
 		secretHead = "sk-or-v1-headstraddle-secretA1"
 		secretTail = "sk-or-v1-tailstraddle-secretB2"
@@ -1975,7 +1976,7 @@ func TestTransportErrorEmitIsRedactedAndCapped(t *testing.T) {
 		secretTail + strings.Repeat("F", tailFillerLen)
 
 	f := &scriptedLLMWithErrors{results: []scriptedCall{
-		{err: fmt.Errorf("llm endpoint status 502: %s", body)},
+		{err: &llm.StatusError{StatusCode: http.StatusBadGateway, Body: body}},
 	}}
 
 	var transcript bytes.Buffer
