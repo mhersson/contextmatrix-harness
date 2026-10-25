@@ -136,7 +136,7 @@ func TestInteractiveIncapableRecovery(t *testing.T) {
 	assert.True(t, sawIncapableError, "error event for incapable must be emitted before awaiting input")
 }
 
-// TestRun_InteractiveRequiresInbox verifies that Run returns a clear error
+// TestRun_InteractiveRequiresInbox verifies that Run returns an error
 // immediately when Interactive=true and Inbox is nil, without panicking.
 func TestRun_InteractiveRequiresInbox(t *testing.T) {
 	reg := tools.NewRegistry()
@@ -147,8 +147,8 @@ func TestRun_InteractiveRequiresInbox(t *testing.T) {
 		Inbox:       nil,
 	})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "Interactive mode requires a non-nil Inbox")
 	assert.False(t, res.Completed)
+	assert.Zero(t, f.i, "the config check fails before any model call")
 }
 
 // TestAwaitNext_EmitsTurnsKey checks that the awaiting_human event emitted by

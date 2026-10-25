@@ -2070,8 +2070,8 @@ func (toolBurnLLM) Send(_ context.Context, _ llm.Request) (llm.Response, error) 
 	}}}, nil
 }
 
-func (toolBurnLLM) SendStream(_ context.Context, _ llm.Request, _ func(llm.Delta)) (llm.Response, error) {
-	return toolBurnLLM{}.Send(nil, llm.Request{}) //nolint:staticcheck // ctx unused
+func (toolBurnLLM) SendStream(ctx context.Context, req llm.Request, _ func(llm.Delta)) (llm.Response, error) {
+	return toolBurnLLM{}.Send(ctx, req)
 }
 
 func TestRunExportsMessagesOnMaxTurns(t *testing.T) {
