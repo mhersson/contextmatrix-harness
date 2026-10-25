@@ -223,7 +223,7 @@ func TestRun_CompactionNoProgressFallsThrough(t *testing.T) {
 		{Role: "tool", ToolCallID: "c3", Content: "r3"},
 	}
 	fake := &capturingLLMSeq{responses: []llm.Response{
-		{Content: "turn1", Usage: llm.Usage{PromptTokens: 900}}, // >850 → triggers compaction
+		crossingToolTurn(),   // >850 → triggers compaction; a final reply would complete instead
 		{Content: "SUMMARY"}, // compact Send
 	}}
 
@@ -267,7 +267,6 @@ func TestRun_CompactionCostIsCounted(t *testing.T) {
 	fake := &capturingLLMSeq{responses: []llm.Response{
 		{Content: "turn1", Usage: llm.Usage{PromptTokens: 900, Cost: 0.01}},                         // triggers compaction
 		{Content: "SUMMARY", Usage: llm.Usage{PromptTokens: 500, CompletionTokens: 20, Cost: 0.10}}, // compact Send
-		{Content: "done", FinishReason: "stop", Usage: llm.Usage{Cost: 0.02}},
 	}}
 	res, err := Run(context.Background(), fake, tools.NewRegistry(), newEmitter(), "go", Config{
 		MaxTurns:      10,
@@ -277,7 +276,7 @@ func TestRun_CompactionCostIsCounted(t *testing.T) {
 		History:       history,
 	})
 	require.NoError(t, err)
-	assert.InEpsilon(t, 0.13, res.TotalCostUSD, 1e-9) // 0.01 + 0.10 + 0.02
+	assert.InEpsilon(t, 0.11, res.TotalCostUSD, 1e-9) // 0.01 + 0.10
 	assert.EqualValues(t, 1400, res.PromptTokens)     // 900 + 500
 	assert.EqualValues(t, 20, res.CompletionTokens)
 }
@@ -302,7 +301,6 @@ func TestRun_CompactionCacheBucketsAccumulate(t *testing.T) {
 				CacheCreationInputTokens: 15,
 			},
 		}, // compact Send, cache detail present
-		{Content: "done", FinishReason: "stop", Usage: llm.Usage{Cost: 0.02}},
 	}}
 	res, err := Run(context.Background(), fake, tools.NewRegistry(), newEmitter(), "go", Config{
 		MaxTurns:      10,
@@ -2241,7 +2239,6 @@ func TestRunCompactionUsageEventCarriesCacheBuckets(t *testing.T) {
 				CompletionTokensDetails:  &llm.CompletionTokensDetails{ReasoningTokens: 5},
 			},
 		},
-		{Content: "done", FinishReason: "stop"},
 	}}
 
 	var transcript bytes.Buffer

@@ -81,8 +81,9 @@ func TestRunContextLimitAndCompactionPrecedeEmptyRetry(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "done", res.Reason)
 		assert.Equal(t, 6, calls)
-		// Compaction restarts the count, so the empty after it is retried, not fatal.
-		assert.Equal(t, 3, retries)
+		// Compaction restarts the count, so the empty reply it kept and the one
+		// after it are both retried, not fatal.
+		assert.Equal(t, 4, retries)
 	})
 }
 

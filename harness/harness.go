@@ -46,15 +46,17 @@ func isEmptyResponse(resp llm.Response) bool {
 }
 
 // contextLimitThreshold is the fraction of the model's context window that, once
-// the prompt reaches it, makes the harness stop and return incomplete when no
-// Compaction is configured. With Config.Compaction set, in-window compaction
-// runs first and this remains the fall-through hard stop. Detection uses the
-// provider's authoritative prompt_tokens.
+// a reply's prompt reaches it, makes the harness stop with context_limit instead
+// of sending another request. A final reply (non-empty, no tool calls, no Inbox)
+// still completes, since no request follows it. With Config.Compaction set,
+// in-window compaction runs first and this remains the fall-through hard stop.
+// Detection uses the provider's authoritative prompt_tokens.
 const contextLimitThreshold = 0.85
 
 // Compaction controls in-window context compaction. When non-nil, the harness
-// summarizes the older conversation prefix once the effective threshold is reached,
-// then continues instead of hard-stopping.
+// summarizes the older conversation prefix once a reply's prompt reaches the
+// effective threshold, keeps that reply and carries on with it instead of
+// hard-stopping.
 type Compaction struct {
 	// Threshold is the fraction of ContextWindow at which compaction fires
 	// (e.g. 0.85 = 85%). The effective threshold is the minimum of this value
@@ -82,13 +84,13 @@ type Config struct {
 	Inbox              Inbox               // nil = autonomous; non-nil feeds mid-run human input
 	IncapableThreshold int                 // consecutive unproductive turns before "incapable"; 0 → default 3
 	History            []llm.Message       // prior conversation to seed before the initial task message; nil = unchanged behavior
-	Compaction         *Compaction         // nil = hard context_limit stop (v1 behavior); non-nil = in-window compaction
+	Compaction         *Compaction         // nil = hard context_limit stop; non-nil = in-window compaction
 	Interactive        bool                // true = unbounded turns; incapable, transport and empty-reply errors await next input instead of terminating (requires Inbox)
 	// OnDelta receives each streamed content, reasoning or tool-call fragment
 	// as it arrives, and a Reset before a mid-stream replay, synchronously on
 	// the Run goroutine, so a caller can surface progress during a long turn.
 	// nil = no callback. Reset covers one model call only: a turn the harness
-	// abandons (a failed call, a compaction discard) sends none, and tool-call
+	// abandons (a failed call or an empty reply) sends none, and tool-call
 	// indexes restart with each call. Fragments are raw model output:
 	// RedactToolOutput is not applied and a secret can span fragments, so a
 	// caller that persists or prints them must redact them itself.
@@ -430,6 +432,10 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 			"reasoning_tokens": resp.Usage.ReasoningTokens(),
 		}, resp.Provider))
 
+		// compacted marks a reply whose history compaction replaced: the reply is
+		// kept, and the hard stop is skipped because the history it measured is gone.
+		compacted := false
+
 		if cfg.ContextWindow > 0 {
 			if cfg.Compaction != nil {
 				if resp.Usage.PromptTokens >= effectiveCompactionThreshold(cfg.ContextWindow, cfg.Compaction.Threshold) {
@@ -456,18 +462,15 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 						}, cResp.Provider))
 					}
 
-					if cerr == nil && len(newMsgs) < len(msgs) {
-						// Discard the triggering turn's response (its tool calls never
-						// execute) and still count the turn - a transcript consumer may
-						// see a model_response/thinking for an abandoned turn followed
-						// by the compaction event.
+					switch {
+					case cerr == nil && len(newMsgs) < len(msgs):
+						// The retained tail ends with the message this reply answered, so
+						// appending the reply keeps the role order and tool groups valid.
 						msgs = newMsgs
+						compacted = true
+						// The next request runs against new history, so the empty-reply count restarts.
 						emptyRun = 0
-
-						continue
-					}
-
-					if cerr == nil {
+					case cerr == nil:
 						// Compaction produced no forward progress (snapped tail already
 						// dominates the window). Fall through to the hard stop instead of
 						// re-compacting forever.
@@ -475,7 +478,7 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 							"event": "compaction_failed",
 							"error": "no forward progress",
 						})
-					} else {
+					default:
 						// Compaction failed (e.g. nothing left to summarize): emit a
 						// warning and fall through to the hard-stop check below.
 						emit.Emit(events.StateChange, map[string]any{
@@ -493,7 +496,10 @@ func Run(ctx context.Context, client llm.LLM, reg *tools.Registry, emit *events.
 				}
 			}
 
-			if resp.Usage.PromptTokens >= hardStop {
+			// A final reply ends the run, so no further request can overflow the window.
+			final := !isEmptyResponse(resp) && len(resp.ToolCalls) == 0 && cfg.Inbox == nil
+
+			if !compacted && !final && resp.Usage.PromptTokens >= hardStop {
 				res.Reason = "context_limit"
 
 				emit.Emit(events.ContextLimit, map[string]any{

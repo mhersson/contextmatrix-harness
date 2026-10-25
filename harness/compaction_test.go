@@ -16,20 +16,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestRun_CompactsWhenOverThreshold verifies that when cfg.Compaction is set and
-// the first-turn response exceeds the effective compaction threshold, compact() is
-// called, the summarize call receives the older prefix, the resulting messages
-// replace the history (system + summary + last KeepRecentTurns), and a compaction
-// state_change event is emitted.
-//
-// ContextWindow=1000, Threshold=0.85: effectiveCompactionThreshold returns 850
-// (the floor window-8192 is negative so it is not applied). PromptTokens=900
-// exceeds 850, triggering compaction. The important assertion is structural -
-// the right messages end up in the post-compaction request.
-func TestRun_CompactsWhenOverThreshold(t *testing.T) {
-	t.Helper()
-
-	// 20-message history gives an older prefix long enough to summarize.
+// history20 alternates 20 user and assistant messages, an older prefix long
+// enough for compaction to summarize.
+func history20() []llm.Message {
 	history := make([]llm.Message, 20)
 	for i := range history {
 		if i%2 == 0 {
@@ -39,56 +28,278 @@ func TestRun_CompactsWhenOverThreshold(t *testing.T) {
 		}
 	}
 
-	// Scripted responses consumed in order by both Send (compact) and SendStream (loop):
-	//   [0] Turn 1 SendStream: PromptTokens=900 - triggers compaction
-	//   [1] Compact Send:      returns "SUMMARY"
-	//   [2] Turn 2 SendStream: no tool calls → "done"
+	return history
+}
+
+// compactingConfig compacts at 900 prompt tokens: a 1000-token window at
+// Threshold 0.85 gives an effective threshold of 850.
+func compactingConfig(keepRecent int) Config {
+	return Config{
+		MaxTurns: 10, SystemPrompt: "SYS", ContextWindow: 1000,
+		Compaction: &Compaction{Threshold: 0.85, KeepRecentTurns: keepRecent},
+		History:    history20(),
+	}
+}
+
+func roles(msgs []llm.Message) []string {
+	out := make([]string, 0, len(msgs))
+	for _, m := range msgs {
+		out = append(out, m.Role)
+	}
+
+	return out
+}
+
+// crossingToolTurn is a tool-call reply at 900 prompt tokens, so a run that
+// compacts on it still sends a next request.
+func crossingToolTurn() llm.Response {
+	return llm.Response{ToolCalls: []llm.ToolCall{toolCall("c1", "probe", "{}")}, Usage: llm.Usage{PromptTokens: 900}}
+}
+
+func TestRunCompactionKeepsTheFinalReply(t *testing.T) {
+	tests := []struct {
+		keepRecent int
+		wantRoles  []string
+	}{
+		// The retained tail is empty, so the kept reply follows the summary.
+		{keepRecent: 0, wantRoles: []string{"system", "user", "assistant"}},
+		{keepRecent: 2, wantRoles: []string{"system", "user", "assistant", "user", "assistant"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("keepRecent_%d", tt.keepRecent), func(t *testing.T) {
+			fake := &capturingLLMSeq{responses: []llm.Response{
+				{Content: "FIRST ANSWER", Reasoning: "thought", FinishReason: "stop", Usage: llm.Usage{PromptTokens: 900}},
+				{Content: "SUMMARY"},
+				{Content: "SECOND ANSWER", FinishReason: "stop"},
+			}}
+
+			var transcript bytes.Buffer
+
+			res, err := Run(context.Background(), fake, tools.NewRegistry(), events.NewEmitter(nil, &transcript), "go", compactingConfig(tt.keepRecent))
+			require.NoError(t, err)
+			assert.True(t, res.Completed)
+			assert.Equal(t, "done", res.Reason)
+			assert.Equal(t, "FIRST ANSWER", res.Output)
+			assert.Equal(t, 1, res.Turns)
+			require.Len(t, fake.requests, 2, "the turn and the summarize call, with no re-ask")
+
+			var answers []string
+
+			thinking, turnUsage, compactions := 0, 0, 0
+
+			for _, ev := range parseEvents(t, transcript.String()) {
+				switch {
+				case ev.Kind == events.ModelResponse:
+					content, _ := ev.Data["content"].(string)
+					answers = append(answers, content)
+				case ev.Kind == events.Thinking:
+					thinking++
+				case ev.Kind == events.UsageKind && ev.Data["phase"] == nil:
+					turnUsage++
+				case ev.Kind == events.StateChange && ev.Data["event"] == "compaction":
+					compactions++
+				}
+			}
+
+			assert.Equal(t, []string{"FIRST ANSWER"}, answers)
+			assert.Equal(t, 1, thinking)
+			assert.Equal(t, 1, turnUsage)
+			assert.Equal(t, 1, compactions)
+
+			assert.Equal(t, tt.wantRoles, roles(res.Messages))
+			assert.Contains(t, res.Messages[1].Content, "SUMMARY")
+			assert.Equal(t, "FIRST ANSWER", res.Messages[len(res.Messages)-1].Content)
+		})
+	}
+}
+
+func TestRunCompactionRetriesAnEmptyKeptReply(t *testing.T) {
 	fake := &capturingLLMSeq{responses: []llm.Response{
-		{Content: "turn1", Usage: llm.Usage{PromptTokens: 900}},
+		{Usage: llm.Usage{PromptTokens: 900}},
 		{Content: "SUMMARY"},
-		{Content: "done", FinishReason: "stop"},
+		{Content: "ANSWER", FinishReason: "stop"},
 	}}
 
-	var transcript bytes.Buffer
-
-	emit := events.NewEmitter(nil, &transcript)
-
-	cfg := Config{
-		MaxTurns:      10,
-		SystemPrompt:  "SYS",
-		ContextWindow: 1000,
-		Compaction:    &Compaction{Threshold: 0.85, KeepRecentTurns: 2},
-		History:       history,
-	}
-
-	res, err := Run(context.Background(), fake, tools.NewRegistry(), emit, "go", cfg)
+	res, err := Run(context.Background(), fake, tools.NewRegistry(), newEmitter(), "go", compactingConfig(2))
 	require.NoError(t, err)
 	assert.Equal(t, "done", res.Reason)
-
-	// A compaction state_change event must have been emitted.
-	evs := parseEvents(t, transcript.String())
-
-	var sawCompaction bool
-
-	for _, ev := range evs {
-		if ev.Kind == events.StateChange && ev.Data["event"] == "compaction" {
-			sawCompaction = true
-
-			break
-		}
-	}
-
-	require.True(t, sawCompaction, "compaction state_change event not emitted")
-
-	// Three requests: turn-1 SendStream, compact Send, turn-2 SendStream.
+	assert.Equal(t, "ANSWER", res.Output)
 	require.Len(t, fake.requests, 3)
 
-	// The post-compaction request (index 2) must carry the compacted history:
-	// system prompt → summary → last KeepRecentTurns messages → task message.
-	postMsgs := fake.requests[2].Messages
-	require.Equal(t, "system", postMsgs[0].Role, "first message must be the system prompt")
-	require.Contains(t, postMsgs[1].Content, "SUMMARY", "second message must contain the compaction summary")
-	assert.LessOrEqual(t, len(postMsgs), 5, "system + summary + KeepRecentTurns(2) + task ≤ 5")
+	retry := fake.requests[2].Messages
+	assert.Equal(t, []string{"system", "user", "assistant", "user"}, roles(retry), "the retry carries the compacted history")
+	assert.Contains(t, retry[1].Content, "SUMMARY")
+}
+
+func TestRunCompactionKeepsTheReplyAndAwaitsInput(t *testing.T) {
+	tests := []struct {
+		keepRecent int
+		wantRoles  []string
+	}{
+		{keepRecent: 0, wantRoles: []string{"system", "user", "assistant", "user"}},
+		{keepRecent: 2, wantRoles: []string{"system", "user", "assistant", "user", "assistant", "user"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("keepRecent_%d", tt.keepRecent), func(t *testing.T) {
+			fake := &capturingLLMSeq{responses: []llm.Response{
+				{Content: "FIRST ANSWER", FinishReason: "stop", Usage: llm.Usage{PromptTokens: 900}},
+				{Content: "SUMMARY"},
+				{Content: "SECOND ANSWER", FinishReason: "stop"},
+			}}
+
+			cfg := compactingConfig(tt.keepRecent)
+			cfg.Inbox = &scriptedInbox{
+				pending:  []UserMessage{{MessageID: "m1", Content: "FOLLOW UP"}},
+				closeErr: ErrInboxClosed, deliverViaWaitOnly: true,
+			}
+
+			var transcript bytes.Buffer
+
+			res, err := Run(context.Background(), fake, tools.NewRegistry(), events.NewEmitter(nil, &transcript), "go", cfg)
+			require.NoError(t, err)
+			assert.Equal(t, "done", res.Reason)
+			assert.Equal(t, 2, res.Turns)
+			require.Len(t, fake.requests, 3, "the turn, the summarize call, and the turn after the user's reply")
+
+			next := fake.requests[2].Messages
+			assert.Equal(t, tt.wantRoles, roles(next))
+			assert.Contains(t, next[1].Content, "SUMMARY")
+			assert.Equal(t, "FIRST ANSWER", next[len(next)-2].Content)
+			assert.Equal(t, "FOLLOW UP", next[len(next)-1].Content)
+
+			var seq []string
+
+			for _, ev := range parseEvents(t, transcript.String()) {
+				switch {
+				case ev.Kind == events.ModelResponse:
+					content, _ := ev.Data["content"].(string)
+					seq = append(seq, content)
+				case ev.Kind == events.StateChange && ev.Data["state"] == "awaiting_human":
+					seq = append(seq, "awaiting_human")
+				case ev.Kind == events.UserInput:
+					seq = append(seq, "user_input")
+				}
+			}
+
+			assert.Equal(t, []string{"FIRST ANSWER", "awaiting_human", "user_input", "SECOND ANSWER", "awaiting_human"}, seq)
+		})
+	}
+}
+
+func TestRunCompactionRunsTheKeptToolCalls(t *testing.T) {
+	tests := []struct {
+		name       string
+		keepRecent int
+		afterTool  bool // the crossing reply answers a tool result, not the task message
+		wantRoles  []string
+	}{
+		{"after user keepRecent 0", 0, false, []string{"system", "user", "assistant", "tool"}},
+		{"after user keepRecent 2", 2, false, []string{"system", "user", "assistant", "user", "assistant", "tool"}},
+		{"after tool keepRecent 0", 0, true, []string{"system", "user", "assistant", "tool"}},
+		{"after tool keepRecent 2", 2, true, []string{"system", "user", "assistant", "tool", "assistant", "tool"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			probe := &countingTool{name: "probe"}
+
+			var responses []llm.Response
+
+			wantCalls := 1
+
+			if tt.afterTool {
+				responses = append(responses, llm.Response{ToolCalls: []llm.ToolCall{toolCall("c0", "probe", "{}")}, Usage: llm.Usage{PromptTokens: 100}})
+				wantCalls++
+			}
+
+			responses = append(responses,
+				llm.Response{ToolCalls: []llm.ToolCall{toolCall("c1", "probe", "{}")}, Usage: llm.Usage{PromptTokens: 900}},
+				llm.Response{Content: "SUMMARY"},
+				llm.Response{Content: "done", FinishReason: "stop"},
+			)
+			fake := &capturingLLMSeq{responses: responses}
+
+			res, err := Run(context.Background(), fake, tools.NewRegistry(probe), newEmitter(), "go", compactingConfig(tt.keepRecent))
+			require.NoError(t, err)
+			assert.Equal(t, "done", res.Reason)
+			assert.Equal(t, wantCalls, probe.calls, "every tool call runs exactly once")
+			require.Len(t, fake.requests, len(responses))
+
+			next := fake.requests[len(fake.requests)-1].Messages
+			assert.Equal(t, tt.wantRoles, roles(next))
+			assertFirstNonSystemIsUser(t, next)
+			assertWellPaired(t, next)
+			assert.Contains(t, next[1].Content, "SUMMARY")
+
+			kept := next[len(next)-2]
+			require.Len(t, kept.ToolCalls, 1)
+			assert.Equal(t, "c1", kept.ToolCalls[0].ID)
+			assert.Equal(t, "c1", next[len(next)-1].ToolCallID)
+		})
+	}
+}
+
+func TestRunHardStopLetsAFinalReplyComplete(t *testing.T) {
+	final := scriptedCall{resp: llm.Response{Content: "ANSWER", FinishReason: "stop", Usage: llm.Usage{PromptTokens: 900}}}
+	toolTurn := scriptedCall{resp: llm.Response{ToolCalls: []llm.ToolCall{toolCall("c1", "probe", "{}")}, Usage: llm.Usage{PromptTokens: 900}}}
+	summarizeDown := scriptedCall{err: errors.New("summarize down")}
+
+	tests := []struct {
+		name       string
+		compaction bool
+		inbox      bool
+		calls      []scriptedCall
+		wantReason string
+	}{
+		{"final reply without compaction", false, false, []scriptedCall{final}, "done"},
+		{"tool-call reply without compaction", false, false, []scriptedCall{toolTurn}, "context_limit"},
+		{"final reply with an inbox", false, true, []scriptedCall{final}, "context_limit"},
+		{"final reply after a failed compaction", true, false, []scriptedCall{final, summarizeDown}, "done"},
+		{"tool-call reply after a failed compaction", true, false, []scriptedCall{toolTurn, summarizeDown}, "context_limit"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			probe := &countingTool{name: "probe"}
+
+			cfg := Config{MaxTurns: 10, ContextWindow: 1000}
+			if tt.compaction {
+				cfg = compactingConfig(2)
+			}
+
+			if tt.inbox {
+				cfg.Inbox = &scriptedInbox{closeErr: ErrInboxClosed}
+			}
+
+			f := &scriptedLLMWithErrors{results: tt.calls}
+
+			var transcript bytes.Buffer
+
+			res, err := Run(context.Background(), f, tools.NewRegistry(probe), events.NewEmitter(nil, &transcript), "go", cfg)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantReason, res.Reason)
+			assert.Equal(t, tt.wantReason == "done", res.Completed)
+			assert.Equal(t, len(tt.calls), f.i, "no request follows the reply")
+			assert.Zero(t, probe.calls, "no tool runs past the hard stop")
+
+			limits := 0
+
+			for _, ev := range parseEvents(t, transcript.String()) {
+				if ev.Kind == events.ContextLimit {
+					limits++
+				}
+			}
+
+			if tt.wantReason == "done" {
+				assert.Zero(t, limits)
+				assert.Equal(t, "ANSWER", res.Output)
+			} else {
+				assert.Equal(t, 1, limits)
+			}
+		})
+	}
 }
 
 // TestCompact_ForwardsModelsAndProvider verifies that the summarize request
@@ -98,19 +309,9 @@ func TestRun_CompactsWhenOverThreshold(t *testing.T) {
 func TestCompact_ForwardsModelsAndProvider(t *testing.T) {
 	t.Helper()
 
-	history := make([]llm.Message, 20)
-	for i := range history {
-		if i%2 == 0 {
-			history[i] = llm.Message{Role: "user", Content: fmt.Sprintf("user %d", i)}
-		} else {
-			history[i] = llm.Message{Role: "assistant", Content: fmt.Sprintf("assistant %d", i)}
-		}
-	}
-
 	fake := &capturingLLMSeq{responses: []llm.Response{
 		{Content: "turn1", Usage: llm.Usage{PromptTokens: 900}},
 		{Content: "SUMMARY"},
-		{Content: "done", FinishReason: "stop"},
 	}}
 
 	var transcript bytes.Buffer
@@ -122,7 +323,7 @@ func TestCompact_ForwardsModelsAndProvider(t *testing.T) {
 		SystemPrompt:  "SYS",
 		ContextWindow: 1000,
 		Compaction:    &Compaction{Threshold: 0.85, KeepRecentTurns: 2},
-		History:       history,
+		History:       history20(),
 		Models:        []string{"m1", "m2"},
 		Provider:      json.RawMessage(`{"sort":"price"}`),
 	}
@@ -130,8 +331,8 @@ func TestCompact_ForwardsModelsAndProvider(t *testing.T) {
 	_, err := Run(context.Background(), fake, tools.NewRegistry(), emit, "go", cfg)
 	require.NoError(t, err)
 
-	// Three requests: turn-1 SendStream, compact Send, turn-2 SendStream.
-	require.Len(t, fake.requests, 3)
+	// The turn and the compact Send; the kept final reply ends the run.
+	require.Len(t, fake.requests, 2)
 
 	// The summarize request (index 1) must carry Models and Provider from Config.
 	summarizeReq := fake.requests[1]
@@ -452,12 +653,12 @@ func replayHistory20() []llm.Message {
 
 func TestCompactStripsReasoningFromSummarizerInputOnly(t *testing.T) {
 	fake := &capturingLLMSeq{responses: []llm.Response{
-		{Content: "turn1", Usage: llm.Usage{PromptTokens: 900}}, // triggers compaction
+		crossingToolTurn(),
 		{Content: "SUMMARY"},
 		{Content: "done", FinishReason: "stop"},
 	}}
 
-	_, err := Run(context.Background(), fake, tools.NewRegistry(), newEmitter(), "go", Config{
+	_, err := Run(context.Background(), fake, tools.NewRegistry(&countingTool{name: "probe"}), newEmitter(), "go", Config{
 		MaxTurns: 10, SystemPrompt: "SYS", ContextWindow: 1000,
 		Compaction: &Compaction{Threshold: 0.85, KeepRecentTurns: 3},
 		History:    replayHistory20(), ReplayReasoning: true,
@@ -483,7 +684,7 @@ func TestCompactStripsReasoningFromSummarizerInputOnly(t *testing.T) {
 
 func TestCompactFailureKeepsReasoningAndStopsOnProviderCount(t *testing.T) {
 	fake := &scriptedLLMWithErrors{results: []scriptedCall{
-		{resp: llm.Response{Content: "turn1", Usage: llm.Usage{PromptTokens: 900}}},
+		{resp: crossingToolTurn()},
 		{err: errors.New("summarize down")},
 	}}
 
@@ -515,12 +716,12 @@ func TestCompactionRequestIsNeverPinned(t *testing.T) {
 	}
 
 	fake := &capturingLLMSeq{responses: []llm.Response{
-		{Content: "turn1", Usage: llm.Usage{PromptTokens: 900}}, // triggers compaction
+		crossingToolTurn(),
 		{Content: "SUMMARY"},
 		{Content: "done", FinishReason: "stop"},
 	}}
 
-	_, err := Run(context.Background(), fake, tools.NewRegistry(), newEmitter(), "go", Config{
+	_, err := Run(context.Background(), fake, tools.NewRegistry(&countingTool{name: "probe"}), newEmitter(), "go", Config{
 		MaxTurns: 10, SystemPrompt: "SYS", ContextWindow: 1000, Provider: json.RawMessage(`{"sort":"price"}`),
 		Compaction: &Compaction{Threshold: 0.85, KeepRecentTurns: 3},
 		History:    history, ReplayReasoning: true,
