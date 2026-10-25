@@ -31,7 +31,7 @@ func NewBashTool(root string) BashTool {
 }
 
 // WithExtraEnv returns a copy with additional KEY=VALUE entries appended to the
-// scrubbed environment (e.g. "GOCACHE=/tmp/gocache").
+// scrubbed environment, for variables a deployment's commands need.
 func (t BashTool) WithExtraEnv(kvs []string) BashTool {
 	t.extraEnv = kvs
 

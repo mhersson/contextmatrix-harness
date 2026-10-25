@@ -219,7 +219,7 @@ func TestNoExtraReadRootsIsUnchanged(t *testing.T) {
 }
 
 // TestUnresolvableReadRootIsDropped pins that a root which cannot be resolved
-// when the tool is built grants nothing later. A worker that builds its tools
+// when the tool is built grants nothing later. A caller that builds its tools
 // before the dependency tree is mounted would otherwise carry a root that is
 // judged only by a per-call re-resolution - and the path that appears later can
 // point anywhere, including at the workspace's own parent.
