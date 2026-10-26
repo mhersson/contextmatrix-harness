@@ -33,7 +33,7 @@ func (m Message) HasReasoningDetails() bool {
 }
 
 // MarshalJSON emits `content` as the parts array when ContentParts is set,
-// otherwise as the string Content (byte-identical to the prior wire form).
+// otherwise as the string Content.
 // When both are empty `content` is omitted - except for an assistant message
 // with no tool calls, which emits an explicit `"content":""`: the Chat
 // Completions contract requires assistant content unless tool_calls is
@@ -121,8 +121,7 @@ type Request struct {
 	Reasoning    json.RawMessage `json:"reasoning,omitempty"`
 	Usage        *UsageOpt       `json:"usage,omitempty"`
 	CacheControl *CacheControl   `json:"cache_control,omitempty"`
-	// openai dialect only; populated by encodeRequest, never by callers. Slated to
-	// move to a private wire struct in the next major version.
+	// openai dialect only; populated by encodeRequest, never by callers.
 	ReasoningEffort string         `json:"reasoning_effort,omitempty"`
 	StreamOptions   *streamOptions `json:"stream_options,omitempty"`
 }
@@ -278,7 +277,9 @@ type ToolCallDelta struct {
 	ArgsFragment string
 }
 
-// LLM is the narrow interface the harness depends on.
+// LLM is the narrow interface the harness depends on. An implementation reports
+// a non-200 reply as *StatusError, and a wrapper must keep it reachable with %w,
+// because Run's 400 handling uses errors.As.
 type LLM interface {
 	Send(ctx context.Context, req Request) (Response, error)
 	SendStream(ctx context.Context, req Request, onDelta func(Delta)) (Response, error)

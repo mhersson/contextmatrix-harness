@@ -70,8 +70,11 @@ func TestRetryExponentialBackoffWithoutRetryAfter(t *testing.T) {
 	}
 
 	_, err := c.Send(context.Background(), Request{Messages: []Message{{Role: "user"}}})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "500")
+
+	var se *StatusError
+	require.ErrorAs(t, err, &se, "the final attempt's status survives the retries")
+	assert.Equal(t, http.StatusInternalServerError, se.StatusCode)
+	assert.Equal(t, "boom", se.Body)
 	assert.Equal(t, int32(4), calls.Load()) // 1 + 3 retries
 	assert.Equal(t, []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}, delays)
 }

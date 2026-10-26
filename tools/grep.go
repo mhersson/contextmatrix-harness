@@ -145,8 +145,8 @@ func (t GrepTool) ReadOnly() bool { return true }
 // WithReadRoots returns a copy that may also read inside the given trees, in
 // addition to the workspace. Roots are caller-supplied configuration - never a
 // tool argument - and are filtered by sanitizeReadRoots, so a root that would
-// widen past the workspace is dropped. With no roots the tool behaves exactly
-// as before. Only the search path resolves against them: with no path argument
+// widen past the workspace is dropped. With no roots the tool reads only the
+// workspace. Only the search path resolves against them: with no path argument
 // the tool still works from the workspace root.
 func (t GrepTool) WithReadRoots(roots []string) GrepTool {
 	t.extraRoots = sanitizeReadRoots(t.root, roots)

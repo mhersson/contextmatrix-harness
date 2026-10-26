@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -208,22 +209,11 @@ func TestRunContextLimitDisabledWhenWindowZero(t *testing.T) {
 }
 
 func TestRun_CompactionNoProgressFallsThrough(t *testing.T) {
-	// A single assistant+3-tool group as history: snapping pulls the whole group
-	// into the kept tail, older collapses to [user "old"], and out == in (no shrink).
-	tcs := []llm.ToolCall{
-		{ID: "c1", Type: "function", Function: llm.FunctionCall{Name: "foo", Arguments: "{}"}},
-		{ID: "c2", Type: "function", Function: llm.FunctionCall{Name: "foo", Arguments: "{}"}},
-		{ID: "c3", Type: "function", Function: llm.FunctionCall{Name: "foo", Arguments: "{}"}},
-	}
-	history := []llm.Message{
-		{Role: "user", Content: "old"},
-		{Role: "assistant", ToolCalls: tcs},
-		{Role: "tool", ToolCallID: "c1", Content: "r1"},
-		{Role: "tool", ToolCallID: "c2", Content: "r2"},
-		{Role: "tool", ToolCallID: "c3", Content: "r3"},
-	}
+	// Snapping pulls the history's whole tool group into the kept tail, older
+	// collapses to [user "old"], and out == in (no shrink).
+	history := noProgressHistory()
 	fake := &capturingLLMSeq{responses: []llm.Response{
-		{Content: "turn1", Usage: llm.Usage{PromptTokens: 900}}, // >850 → triggers compaction
+		crossingToolTurn(),   // >850 → triggers compaction; a final reply would complete instead
 		{Content: "SUMMARY"}, // compact Send
 	}}
 
@@ -243,15 +233,15 @@ func TestRun_CompactionNoProgressFallsThrough(t *testing.T) {
 	assert.Equal(t, "context_limit", res.Reason)
 	require.Len(t, fake.requests, 2) // turn-1 SendStream + one compact Send; no turn-2
 
-	sawFailed := false
+	var compactionEvents []any
 
 	for _, ev := range parseEvents(t, transcript.String()) {
-		if ev.Kind == events.StateChange && ev.Data["event"] == "compaction_failed" {
-			sawFailed = true
+		if ev.Kind == events.StateChange && (ev.Data["event"] == "compaction" || ev.Data["event"] == "compaction_failed") {
+			compactionEvents = append(compactionEvents, ev.Data["event"])
 		}
 	}
 
-	assert.True(t, sawFailed, "no-progress compaction must emit compaction_failed")
+	assert.Equal(t, []any{"compaction_failed"}, compactionEvents, "a no-progress attempt emits only compaction_failed")
 }
 
 func TestRun_CompactionCostIsCounted(t *testing.T) {
@@ -264,12 +254,15 @@ func TestRun_CompactionCostIsCounted(t *testing.T) {
 		}
 	}
 
+	turn1 := crossingToolTurn() // triggers compaction
+	turn1.Usage.Cost = 0.01
+
 	fake := &capturingLLMSeq{responses: []llm.Response{
-		{Content: "turn1", Usage: llm.Usage{PromptTokens: 900, Cost: 0.01}},                         // triggers compaction
+		turn1,
 		{Content: "SUMMARY", Usage: llm.Usage{PromptTokens: 500, CompletionTokens: 20, Cost: 0.10}}, // compact Send
 		{Content: "done", FinishReason: "stop", Usage: llm.Usage{Cost: 0.02}},
 	}}
-	res, err := Run(context.Background(), fake, tools.NewRegistry(), newEmitter(), "go", Config{
+	res, err := Run(context.Background(), fake, tools.NewRegistry(&countingTool{name: "probe"}), newEmitter(), "go", Config{
 		MaxTurns:      10,
 		SystemPrompt:  "SYS",
 		ContextWindow: 1000,
@@ -292,8 +285,11 @@ func TestRun_CompactionCacheBucketsAccumulate(t *testing.T) {
 		}
 	}
 
+	turn1 := crossingToolTurn() // triggers compaction
+	turn1.Usage.Cost = 0.01
+
 	fake := &capturingLLMSeq{responses: []llm.Response{
-		{Content: "turn1", Usage: llm.Usage{PromptTokens: 900, Cost: 0.01}}, // triggers compaction
+		turn1,
 		{
 			Content: "SUMMARY",
 			Usage: llm.Usage{
@@ -304,7 +300,7 @@ func TestRun_CompactionCacheBucketsAccumulate(t *testing.T) {
 		}, // compact Send, cache detail present
 		{Content: "done", FinishReason: "stop", Usage: llm.Usage{Cost: 0.02}},
 	}}
-	res, err := Run(context.Background(), fake, tools.NewRegistry(), newEmitter(), "go", Config{
+	res, err := Run(context.Background(), fake, tools.NewRegistry(&countingTool{name: "probe"}), newEmitter(), "go", Config{
 		MaxTurns:      10,
 		SystemPrompt:  "SYS",
 		ContextWindow: 1000,
@@ -1926,8 +1922,8 @@ func TestMultiImageAggregation(t *testing.T) {
 	assert.Equal(t, "data:image/png;base64,IMG2", img.ContentParts[2].ImageURL.URL)
 }
 
-// TestTransportErrorEmitIsRedactedAndCapped covers the last content-bearing
-// emit site: a SendStream error embeds the provider response body (up to
+// TestTransportErrorEmitIsRedactedAndCapped covers the transport-error emit
+// site: a SendStream error embeds the provider response body (up to
 // 8 MiB), so the error event must pass through cfg.RedactToolOutput and the
 // ToolOutputMaxBytes cap like every other emit - and in the correct order
 // (redact, then truncate), never the reverse.
@@ -1943,7 +1939,7 @@ func TestMultiImageAggregation(t *testing.T) {
 func TestTransportErrorEmitIsRedactedAndCapped(t *testing.T) {
 	const (
 		maxBytes  = 1000
-		errPrefix = "llm endpoint status 502: " // must match the fmt.Errorf format below
+		errPrefix = "llm endpoint status 502: " // StatusError's Error text for the reply below
 
 		secretHead = "sk-or-v1-headstraddle-secretA1"
 		secretTail = "sk-or-v1-tailstraddle-secretB2"
@@ -1980,7 +1976,7 @@ func TestTransportErrorEmitIsRedactedAndCapped(t *testing.T) {
 		secretTail + strings.Repeat("F", tailFillerLen)
 
 	f := &scriptedLLMWithErrors{results: []scriptedCall{
-		{err: fmt.Errorf("llm endpoint status 502: %s", body)},
+		{err: &llm.StatusError{StatusCode: http.StatusBadGateway, Body: body}},
 	}}
 
 	var transcript bytes.Buffer
@@ -2075,8 +2071,8 @@ func (toolBurnLLM) Send(_ context.Context, _ llm.Request) (llm.Response, error) 
 	}}}, nil
 }
 
-func (toolBurnLLM) SendStream(_ context.Context, _ llm.Request, _ func(llm.Delta)) (llm.Response, error) {
-	return toolBurnLLM{}.Send(nil, llm.Request{}) //nolint:staticcheck // ctx unused
+func (toolBurnLLM) SendStream(ctx context.Context, req llm.Request, _ func(llm.Delta)) (llm.Response, error) {
+	return toolBurnLLM{}.Send(ctx, req)
 }
 
 func TestRunExportsMessagesOnMaxTurns(t *testing.T) {
@@ -2231,7 +2227,7 @@ func TestRunCompactionUsageEventCarriesCacheBuckets(t *testing.T) {
 	}
 
 	fake := &capturingLLMSeq{responses: []llm.Response{
-		{Content: "turn1", Usage: llm.Usage{PromptTokens: 900, Cost: 0.01}}, // triggers compaction
+		crossingToolTurn(), // triggers compaction
 		{
 			Content: "SUMMARY",
 			Usage: llm.Usage{
@@ -2248,7 +2244,7 @@ func TestRunCompactionUsageEventCarriesCacheBuckets(t *testing.T) {
 
 	emit := events.NewEmitter(nil, &transcript)
 
-	_, err := Run(context.Background(), fake, tools.NewRegistry(), emit, "go", Config{
+	_, err := Run(context.Background(), fake, tools.NewRegistry(&countingTool{name: "probe"}), emit, "go", Config{
 		MaxTurns:      10,
 		Model:         "test-model",
 		ContextWindow: 1000,

@@ -18,7 +18,8 @@ type RetryPolicy struct {
 	Jitter     bool          // spread delays to avoid thundering herds
 }
 
-// DefaultRetryPolicy is the production default the CLI opts into via WithRetry.
+// DefaultRetryPolicy is a production retry policy to pass to WithRetry; a
+// Client without WithRetry makes a single attempt.
 func DefaultRetryPolicy() RetryPolicy {
 	return RetryPolicy{MaxRetries: 4, BaseDelay: time.Second, MaxDelay: 30 * time.Second, Jitter: true}
 }

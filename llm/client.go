@@ -18,6 +18,34 @@ const defaultBaseURL = "https://openrouter.ai/api/v1"
 // vector from a misconfigured or hostile OpenAI-compatible endpoint.
 const maxResponseBody = 8 << 20
 
+// stallTimeout bounds silence on the SSE stream: no bytes at all - data or
+// keepalive - within the window closes the body so the stream-phase retry in
+// SendStream can catch it.
+const stallTimeout = 5 * time.Minute
+
+// StatusError is an endpoint reply whose HTTP status is not 200 OK. Consumers
+// match its Error text, "llm endpoint status <code>: <body>", so it stays fixed.
+// A wrapper must keep it reachable with %w, because Run's 400 handling uses
+// errors.As.
+type StatusError struct {
+	StatusCode int    // HTTP status code of the reply
+	Body       string // raw response body; empty when it exceeded 8 MiB
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("llm endpoint status %d: %s", e.StatusCode, e.Body)
+}
+
+// errOversizeBody reports a reply body past maxResponseBody. A non-200 status
+// stays reachable as *StatusError so callers still classify the reply.
+func errOversizeBody(status int) error {
+	if status != http.StatusOK {
+		return fmt.Errorf("response body exceeds %d bytes: %w", maxResponseBody, &StatusError{StatusCode: status})
+	}
+
+	return fmt.Errorf("response body exceeds %d bytes", maxResponseBody)
+}
+
 type Client struct {
 	http    *http.Client
 	baseURL string
@@ -25,7 +53,6 @@ type Client struct {
 	dialect Dialect
 	retry   RetryPolicy
 	sleep   func(context.Context, time.Duration) error
-	stall   time.Duration
 }
 
 type Option func(*Client)
@@ -34,13 +61,8 @@ func WithBaseURL(u string) Option          { return func(c *Client) { c.baseURL 
 func WithDialect(d Dialect) Option         { return func(c *Client) { c.dialect = d } }
 func WithHTTPClient(h *http.Client) Option { return func(c *Client) { c.http = h } }
 
-// WithStallTimeout bounds silence on the SSE stream: no bytes at all - data
-// or keepalive - within the window closes the body so the stream-phase retry
-// in SendStream can catch it. 0 disables the check.
-func WithStallTimeout(d time.Duration) Option { return func(c *Client) { c.stall = d } }
-
 func NewClient(apiKey string, opts ...Option) *Client {
-	c := &Client{http: &http.Client{}, baseURL: defaultBaseURL, apiKey: apiKey, sleep: ctxSleep, stall: 5 * time.Minute}
+	c := &Client{http: &http.Client{}, baseURL: defaultBaseURL, apiKey: apiKey, sleep: ctxSleep}
 	for _, o := range opts {
 		o(c)
 	}
@@ -95,16 +117,13 @@ func (c *Client) SendStream(ctx context.Context, req Request, onDelta func(Delta
 			_ = hr.Body.Close() //nolint:errcheck
 
 			if len(body) > maxResponseBody {
-				return Response{}, fmt.Errorf("response body exceeds %d bytes", maxResponseBody)
+				return Response{}, errOversizeBody(hr.StatusCode)
 			}
 
-			return Response{}, fmt.Errorf("llm endpoint status %d: %s", hr.StatusCode, string(body))
+			return Response{}, &StatusError{StatusCode: hr.StatusCode, Body: string(body)}
 		}
 
-		body := hr.Body
-		if c.stall > 0 {
-			body = newStallReader(hr.Body, c.stall)
-		}
+		body := newStallReader(hr.Body, stallTimeout)
 
 		if delivered {
 			onDelta(Delta{Reset: true})
@@ -169,11 +188,11 @@ func (c *Client) Send(ctx context.Context, req Request) (Response, error) {
 		}
 
 		if len(body) > maxResponseBody {
-			return Response{}, fmt.Errorf("response body exceeds %d bytes", maxResponseBody)
+			return Response{}, errOversizeBody(hr.StatusCode)
 		}
 
 		if hr.StatusCode != http.StatusOK {
-			return Response{}, fmt.Errorf("llm endpoint status %d: %s", hr.StatusCode, string(body))
+			return Response{}, &StatusError{StatusCode: hr.StatusCode, Body: string(body)}
 		}
 
 		var nr nonStreamResponse

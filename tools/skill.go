@@ -13,8 +13,9 @@ import (
 	"github.com/mhersson/contextmatrix-harness/llm"
 )
 
-// skillNamePattern restricts a skill directory name to the same safe charset
-// ContextMatrix and the runner enforce. Defense-in-depth before any path join.
+// skillNamePattern restricts a skill directory name to a safe charset,
+// independent of any check by the caller that mounts the skills directory.
+// Defense-in-depth before any path join.
 var skillNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 
 // skillEntry is one available skill in the menu.
@@ -37,9 +38,9 @@ type SkillTool struct {
 // NewSkillTool scans dir for skills (subdirectories containing SKILL.md), reads
 // each name+description, applies the 3-state subset filter, and returns the tool
 // plus ok=false when the resulting menu is empty (the caller then omits the
-// tool, keeping no-skills runs byte-identical). allowedSet mirrors
-// CM_TASK_SKILLS_SET: false → offer all; true → offer only names in allowed
-// (possibly none).
+// tool, so a run without skills offers no skill tool). allowedSet says whether a
+// subset was configured at all: false → offer all; true → offer only names in
+// allowed (possibly none).
 func NewSkillTool(dir string, allowed []string, allowedSet bool, onEngage func(ctx context.Context, name string) error) (SkillTool, bool) {
 	menu := scanSkills(dir)
 
@@ -69,8 +70,8 @@ func NewSkillTool(dir string, allowed []string, allowedSet bool, onEngage func(c
 func (t SkillTool) Name() string { return "skill" }
 
 // MenuText returns the available skills as one "- name: description" line each,
-// newline-terminated. Single source for both the tool's schema menu and the
-// orchestrator's prompt-injected skill list, so the two cannot drift.
+// newline-terminated. Single source for both the tool's schema menu and any
+// skill list the caller injects into its prompt, so the two cannot drift.
 func (t SkillTool) MenuText() string {
 	var b strings.Builder
 	for _, e := range t.menu {
@@ -126,7 +127,7 @@ func (t SkillTool) Execute(ctx context.Context, args map[string]any) (Result, er
 		}
 
 		// Engagement = loading the skill itself. Best-effort: a report failure
-		// must not fail the load (CM dedups; the model still has the skill).
+		// must not fail the load; the model gets the skill either way.
 		if t.onEngage != nil {
 			_ = t.onEngage(ctx, name)
 		}

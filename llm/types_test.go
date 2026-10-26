@@ -195,6 +195,12 @@ func TestUsageReasoningTokens(t *testing.T) {
 		{"string value", `{"completion_tokens":10,"completion_tokens_details":{"reasoning_tokens":"3"}}`, 0},
 		{"array details", `{"completion_tokens":10,"completion_tokens_details":[]}`, 0},
 		{"object without key", `{"completion_tokens":10,"completion_tokens_details":{}}`, 0},
+		// Only integral values in [0, 2^31) are kept; anything else reads as 0.
+		{"negative", `{"completion_tokens":10,"completion_tokens_details":{"reasoning_tokens":-1}}`, 0},
+		{"fractional", `{"completion_tokens":10,"completion_tokens_details":{"reasoning_tokens":2.5}}`, 0},
+		{"largest in range", `{"completion_tokens":10,"completion_tokens_details":{"reasoning_tokens":2147483647}}`, 1<<31 - 1},
+		{"at 2^31", `{"completion_tokens":10,"completion_tokens_details":{"reasoning_tokens":2147483648}}`, 0},
+		{"far above 2^31", `{"completion_tokens":10,"completion_tokens_details":{"reasoning_tokens":1e12}}`, 0},
 	}
 
 	for _, tt := range tests {

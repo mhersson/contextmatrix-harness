@@ -466,6 +466,80 @@ const (
 	encryptedReasoning400 = `{"error":{"message":"Your request contains encrypted reasoning or compaction content that can only be processed by the provider that created it (claude-on-aws) or by azure/global, anthropic, azure/us, but your request's provider.order preference with allow_fallbacks disabled excludes all of them. Allow one of them or start a new conversation without the encrypted items.","code":400,"metadata":{"pinned_provider_slug":"claude-on-aws","accepting_provider_slugs":"azure/global,claude-on-aws,anthropic,azure/us","excluding_preferences":["request_order_without_fallbacks"],"failed_routing_step":"Filter by Encrypted Payload Endpoint"}}}`
 )
 
+func statusErr(code int, body string) error { return &llm.StatusError{StatusCode: code, Body: body} }
+
+func TestIsBadRequestReadsTheStatusError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"400 status error", statusErr(http.StatusBadRequest, "rejected"), true},
+		{"wrapped 400 status error", fmt.Errorf("compaction summarize: %w", statusErr(http.StatusBadRequest, "rejected")), true},
+		{"500 status error", statusErr(http.StatusInternalServerError, "down"), false},
+		{"plain error with the same text", errors.New("llm endpoint status 400: rejected"), false},
+		{"nil", nil, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, isBadRequest(tt.err))
+		})
+	}
+}
+
+func TestFailedRoutingStepReadsTheBody(t *testing.T) {
+	const step = "Filter by Encrypted Payload Endpoint"
+
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"400 with routing metadata", statusErr(http.StatusBadRequest, encryptedReasoning400), step},
+		{"wrapped 400", fmt.Errorf("send: %w", statusErr(http.StatusBadRequest, encryptedReasoning400)), step},
+		{"400 without metadata", statusErr(http.StatusBadRequest, `{"error":{"message":"Provider returned error","code":400}}`), ""},
+		{"400 with a non-JSON body", statusErr(http.StatusBadRequest, "<html>bad request</html>"), ""},
+		{"500 with routing metadata", statusErr(http.StatusInternalServerError, encryptedReasoning400), ""},
+		{"plain error with the same text", errors.New("llm endpoint status 400: " + encryptedReasoning400), ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, failedRoutingStep(tt.err))
+		})
+	}
+}
+
+func TestIsBadRequestSeesAnOversizedBadRequest(t *testing.T) {
+	oversized := strings.Repeat("x", 8<<20+1)
+	client, _ := scriptedEndpoint(t,
+		endpointReply{status: http.StatusBadRequest, body: oversized},
+		endpointReply{status: http.StatusBadRequest, body: oversized},
+	)
+	req := llm.Request{Messages: []llm.Message{{Role: "user", Content: "q"}}}
+
+	_, err := client.SendStream(context.Background(), req, nil)
+	assert.True(t, isBadRequest(err), "SendStream")
+
+	_, err = client.Send(context.Background(), req)
+	assert.True(t, isBadRequest(err), "Send")
+}
+
+func TestRunReturnsTheEndpointStatusError(t *testing.T) {
+	const body = "invalid schema"
+
+	client, _ := scriptedEndpoint(t, endpointReply{status: http.StatusUnprocessableEntity, body: body})
+
+	res, err := Run(context.Background(), client, readReg(t), newEmitter(), "task", Config{Model: "m", MaxTurns: 5})
+	assert.Equal(t, "error", res.Reason)
+
+	var se *llm.StatusError
+	require.ErrorAs(t, err, &se)
+	assert.Equal(t, http.StatusUnprocessableEntity, se.StatusCode)
+	assert.Equal(t, body, se.Body)
+}
+
 func TestRunReplayBadRequestRetriesOnceWithoutPinOrDetails(t *testing.T) {
 	client, bodies := scriptedEndpoint(t,
 		endpointReply{body: pinnedTurnSSE},
@@ -521,7 +595,7 @@ func TestRunReplayBadRequestRetriesOnceWithoutPinOrDetails(t *testing.T) {
 
 func TestRunReplayBadRequestTwiceTakesErrorPath(t *testing.T) {
 	// An upstream rejection: no failed_routing_step in the body.
-	bad := errors.New(`llm endpoint status 400: {"error":{"message":"Provider returned error","code":400}}`)
+	bad := statusErr(http.StatusBadRequest, `{"error":{"message":"Provider returned error","code":400}}`)
 	fake := &burnLLM{
 		errs:      []error{nil, bad, bad},
 		responses: []llm.Response{servedBy(readTurn(sigDetails), "Anthropic")},
@@ -546,8 +620,8 @@ func TestRunNoReplayRetryWithoutPinOrDetails(t *testing.T) {
 		replay bool
 		err    error
 	}{
-		{"a 500 is not a replay rejection", true, errors.New("llm endpoint status 500: down")},
-		{"replay off never retries a 400", false, errors.New("llm endpoint status 400: rejected")},
+		{"a 500 is not a replay rejection", true, statusErr(http.StatusInternalServerError, "down")},
+		{"replay off never retries a 400", false, statusErr(http.StatusBadRequest, "rejected")},
 	}
 
 	for _, tt := range tests {
@@ -581,7 +655,7 @@ func TestRunReplayBadRequestRetriesUnpinnedDetails(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			bad := errors.New("llm endpoint status 400: rejected")
+			bad := statusErr(http.StatusBadRequest, "rejected")
 			fake := &burnLLM{
 				errs: []error{nil, bad, nil},
 				responses: []llm.Response{

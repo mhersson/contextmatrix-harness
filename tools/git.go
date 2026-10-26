@@ -17,7 +17,7 @@ func NewGitTool(root string) GitTool { return GitTool{root: root} }
 func (t GitTool) Name() string { return "git" }
 
 // readonlyGitSubcommands is the allowlist. Mutating git (commit/push/rebase/…)
-// is a deterministic orchestrator action, never a model tool.
+// is the caller's deterministic job, never a model tool.
 var readonlyGitSubcommands = map[string]bool{
 	"status": true, "diff": true, "log": true, "show": true, "branch": true,
 }

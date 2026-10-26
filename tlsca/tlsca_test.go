@@ -173,7 +173,11 @@ func TestHTTPClientWithCA(t *testing.T) {
 
 	t.Run("valid CA is trusted", func(t *testing.T) {
 		// Control: the default trust store must reject the self-signed server.
-		_, err := http.Get(srv.URL) //nolint:bodyclose // request fails before a body exists
+		ctrl, err := http.Get(srv.URL)
+		if err == nil {
+			_ = ctrl.Body.Close()
+		}
+
 		require.Error(t, err, "control: default client must not trust the self-signed server")
 
 		c, err := tlsca.HTTPClientWithCA(certPath)
