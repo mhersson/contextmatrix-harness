@@ -100,8 +100,9 @@ make build       # must build
 Fix any failure before proceeding. Never commit red.
 
 - **Never commit to `main`.** Work on a feature branch; tasks of a plan or
-  scope the user approved commit there without asking again. Never push
-  without explicit user approval.
+  scope the user approved commit there without asking again. Pushing a
+  feature branch and opening a PR need no approval; merging a PR, pushing
+  to `main` and pushing a tag each need explicit user approval.
 - No session links in commits or PRs.
 
 **NEVER** reference a plan phase or task number in a commit message.
